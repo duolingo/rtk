@@ -37,7 +37,7 @@ echo ""
 
 # Check 3: Is it Token Killer or Type Kit?
 echo "3. Verifying this is Token Killer (not Type Kit)..."
-if rtk gain &>/dev/null || rtk gain --help &>/dev/null; then
+if rtk --help &>/dev/null; then
     echo -e "   ${GREEN}✅ CORRECT - You have Rust Token Killer${NC}"
     CORRECT_RTK=true
 else
@@ -74,7 +74,6 @@ check_command() {
     fi
 }
 
-check_command "gain" "Token savings analytics"
 check_command "git" "Git operations"
 check_command "gh" "GitHub CLI"
 check_command "pnpm" "pnpm support"

@@ -17,10 +17,10 @@ This is a fork with critical fixes for git argument parsing and modern JavaScrip
 **Verify correct installation:**
 ```bash
 rtk --version  # Should show "rtk 0.28.2" (or newer)
-rtk gain       # Should show token savings stats (NOT "command not found")
+rtk --help      # Should list RTK commands
 ```
 
-If `rtk gain` fails, you have the wrong package installed.
+If `rtk --help` fails, your install is broken.
 
 ## Development Commands
 
@@ -75,8 +75,6 @@ For the full architecture, component details, and module development patterns, s
 
 Module responsibilities are documented in each folder's `README.md` and each file's `//!` doc header. Browse `src/cmds/*/` to discover available filters.
 
-Supported ecosystems: git/gh/gt, cargo, go/golangci-lint, npm/pnpm/npx, ruff/pytest/pip/mypy, rspec/rubocop/rake, dotnet, playwright/vitest/jest, docker/kubectl/aws.
-
 ### Proxy Mode
 
 **Purpose**: Execute commands without filtering but track usage for metrics.
@@ -85,7 +83,6 @@ Supported ecosystems: git/gh/gt, cargo, go/golangci-lint, npm/pnpm/npx, ruff/pyt
 
 **Benefits**:
 - **Bypass RTK filtering**: Workaround bugs or get full unfiltered output
-- **Track usage metrics**: Measure which commands Claude uses most (visible in `rtk gain --history`)
 - **Guaranteed compatibility**: Always works even if RTK doesn't implement the command
 
 **Examples**:
@@ -95,7 +92,6 @@ rtk proxy npm install express      # Raw npm output (no filtering)
 rtk proxy curl https://api.example.com/data  # Any command works
 ```
 
-All proxy commands appear in `rtk gain --history` with 0% savings (input = output).
 
 ## Coding Rules
 

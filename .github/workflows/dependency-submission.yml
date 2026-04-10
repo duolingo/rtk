@@ -1,0 +1,21 @@
+name: Dependency Submission
+
+on:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "0 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  submit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate and submit dependency snapshot
+        uses: advanced-security/cargo-lock-submission@v1

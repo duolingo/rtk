@@ -132,6 +132,5 @@ Run `cargo test parser::tests`. Each parser should have tier validation tests: a
 - [ ] gh_cmd.rs → GhParser
 
 ### Phase 5: Observability
-- [ ] Extend tracking.db: `parse_tier`, `format_mode`
 - [ ] `rtk parse-health` command
 - [ ] Alert if degradation > 10%

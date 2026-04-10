@@ -205,8 +205,6 @@ assert_ok       "rtk err ls"                    rtk err ls "$ARISTOTE/src"
 
 section "Gain (after above commands)"
 
-assert_ok       "rtk gain"                      rtk gain
-assert_ok       "rtk gain --history"            rtk gain --history
 
 # ══════════════════════════════════════════════════════
 # Report

@@ -1,6 +1,6 @@
 //! Reads user settings from config.toml.
 
-use super::constants::{CONFIG_TOML, DEFAULT_HISTORY_DAYS, RTK_DATA_DIR};
+use super::constants::{CONFIG_TOML, RTK_DATA_DIR};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -8,15 +8,11 @@ use std::path::PathBuf;
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
     #[serde(default)]
-    pub tracking: TrackingConfig,
-    #[serde(default)]
     pub display: DisplayConfig,
     #[serde(default)]
     pub filters: FilterConfig,
     #[serde(default)]
     pub tee: crate::core::tee::TeeConfig,
-    #[serde(default)]
-    pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub hooks: HooksConfig,
     #[serde(default)]
@@ -29,24 +25,6 @@ pub struct HooksConfig {
     /// Survives `rtk init -g` re-runs since config.toml is user-owned.
     #[serde(default)]
     pub exclude_commands: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TrackingConfig {
-    pub enabled: bool,
-    pub history_days: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub database_path: Option<PathBuf>,
-}
-
-impl Default for TrackingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            history_days: DEFAULT_HISTORY_DAYS as u32,
-            database_path: None,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,15 +64,6 @@ impl Default for FilterConfig {
             ignore_files: vec!["*.lock".into(), "*.min.js".into(), "*.min.css".into()],
         }
     }
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct TelemetryConfig {
-    pub enabled: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consent_given: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub consent_date: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -206,46 +175,12 @@ exclude_commands = ["curl", "gh"]
     #[test]
     fn test_config_without_hooks_section_is_valid() {
         let toml = r#"
-[tracking]
-enabled = true
-history_days = 90
+[display]
+colors = true
+emoji = true
+max_width = 120
 "#;
         let config: Config = toml::from_str(toml).expect("valid toml");
         assert!(config.hooks.exclude_commands.is_empty());
-    }
-
-    #[test]
-    fn test_old_toml_without_consent_fields() {
-        let toml = r#"
-[telemetry]
-enabled = true
-"#;
-        let config: Config = toml::from_str(toml).expect("valid toml");
-        assert!(config.telemetry.enabled);
-        assert!(config.telemetry.consent_given.is_none());
-        assert!(config.telemetry.consent_date.is_none());
-    }
-
-    #[test]
-    fn test_telemetry_default_disabled() {
-        let config = Config::default();
-        assert!(!config.telemetry.enabled);
-        assert!(config.telemetry.consent_given.is_none());
-    }
-
-    #[test]
-    fn test_telemetry_consent_roundtrip() {
-        let toml = r#"
-[telemetry]
-enabled = true
-consent_given = true
-consent_date = "2026-04-10T12:00:00Z"
-"#;
-        let config: Config = toml::from_str(toml).expect("valid toml");
-        assert_eq!(config.telemetry.consent_given, Some(true));
-        assert_eq!(
-            config.telemetry.consent_date.as_deref(),
-            Some("2026-04-10T12:00:00Z")
-        );
     }
 }

@@ -336,8 +336,6 @@ assert_ok      "rtk test echo ok"             rtk test echo ok
 
 section "Gain"
 
-assert_ok      "rtk gain"                     rtk gain
-assert_ok      "rtk gain --history"           rtk gain --history
 
 # ── 21. Config & Init ────────────────────────────────
 
@@ -470,7 +468,6 @@ assert_ok      "rtk --skip-env npm --help"    rtk --skip-env npm --help
 
 section "CcEconomics"
 
-assert_ok      "rtk cc-economics"             rtk cc-economics
 
 # ── 33. Learn ───────────────────────────────────────
 
@@ -521,7 +518,6 @@ assert_contains "rtk proxy passthrough"       "hello" rtk proxy echo hello
 
 section "Discover"
 
-assert_ok      "rtk discover"                 rtk discover
 
 # ── 36. Diff ──────────────────────────────────────────
 
