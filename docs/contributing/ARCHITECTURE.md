@@ -11,5 +11,5 @@ Main components:
 Removed from this fork:
 
 - OpenClaw integration
-- telemetry sender
-- analytics/tracking commands
+- telemetry sender (removed in this fork)
+- analytics/tracking commands (removed in this fork)

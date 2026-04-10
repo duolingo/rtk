@@ -1,12 +1,14 @@
 //! Reads user settings from config.toml.
 
-use super::constants::{CONFIG_TOML, RTK_DATA_DIR};
+use super::constants::{CONFIG_TOML, DEFAULT_HISTORY_DAYS, RTK_DATA_DIR};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct Config {
+    #[serde(default)]
+    pub tracking: TrackingConfig,
     #[serde(default)]
     pub display: DisplayConfig,
     #[serde(default)]
@@ -25,6 +27,24 @@ pub struct HooksConfig {
     /// Survives `rtk init -g` re-runs since config.toml is user-owned.
     #[serde(default)]
     pub exclude_commands: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TrackingConfig {
+    pub enabled: bool,
+    pub history_days: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub database_path: Option<PathBuf>,
+}
+
+impl Default for TrackingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            history_days: DEFAULT_HISTORY_DAYS as u32,
+            database_path: None,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -175,12 +195,17 @@ exclude_commands = ["curl", "gh"]
     #[test]
     fn test_config_without_hooks_section_is_valid() {
         let toml = r#"
-[display]
-colors = true
-emoji = true
-max_width = 120
+[tracking]
+enabled = true
+history_days = 90
 "#;
         let config: Config = toml::from_str(toml).expect("valid toml");
         assert!(config.hooks.exclude_commands.is_empty());
+    }
+
+    #[test]
+    fn test_old_toml_without_consent_fields() {
+        let toml = r#""#;
+        let config: Config = toml::from_str(toml).expect("valid toml");
     }
 }

@@ -1,4 +1,4 @@
-use super::report::RtkStatus;
+use super::status::RtkStatus;
 
 pub struct RtkRule {
     pub pattern: &'static str,

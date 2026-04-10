@@ -8,4 +8,4 @@ Flow:
 3. Execute underlying command.
 4. Return filtered output.
 
-This fork does not include telemetry or local analytics/tracking.
+This fork does not include telemetry or any call-home path. Local `rtk gain` stats remain local-only.

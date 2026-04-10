@@ -6,17 +6,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use tempfile::NamedTempFile;
 
+use crate::hooks::constants::{
+    CONFIG_DIR, CURSOR_DIR, GEMINI_DIR, OPENCODE_PLUGIN_FILE, OPENCODE_SUBDIR, PLUGIN_SUBDIR,
+};
+
 use super::constants::{
-    BEFORE_TOOL_KEY, CLAUDE_DIR, GEMINI_HOOK_FILE, HOOKS_JSON, HOOKS_SUBDIR, PRE_TOOL_USE_KEY,
-    REWRITE_HOOK_FILE, SETTINGS_JSON,
+    BEFORE_TOOL_KEY, CLAUDE_DIR, CLAUDE_HOOK_COMMAND, CODEX_DIR, CURSOR_HOOK_COMMAND,
+    GEMINI_HOOK_FILE, HOOKS_JSON, HOOKS_SUBDIR, PRE_TOOL_USE_KEY, REWRITE_HOOK_FILE, SETTINGS_JSON,
 };
 use super::integrity;
-
-// Embedded hook script (guards before set -euo pipefail)
-const REWRITE_HOOK: &str = include_str!("../../hooks/claude/rtk-rewrite.sh");
-
-// Embedded Cursor hook script (preToolUse format)
-const CURSOR_REWRITE_HOOK: &str = include_str!("../../hooks/cursor/rtk-rewrite.sh");
 
 // Embedded OpenCode plugin (auto-rewrite)
 const OPENCODE_PLUGIN: &str = include_str!("../../hooks/opencode/rtk.ts");
@@ -61,6 +59,9 @@ const CLAUDE_MD: &str = "CLAUDE.md";
 const AGENTS_MD: &str = "AGENTS.md";
 const RTK_MD_REF: &str = "@RTK.md";
 const GEMINI_MD: &str = "GEMINI.md";
+
+const RTK_BLOCK_START: &str = "<!-- rtk-instructions";
+const RTK_BLOCK_END: &str = "<!-- /rtk-instructions -->";
 
 /// Control flow for settings.json patching
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -109,11 +110,16 @@ rtk prettier --check    # Files needing format only (70%)
 rtk next build          # Next.js build with route metrics (87%)
 ```
 
-### Test (90-99% savings)
+### Test (60-99% savings)
 ```bash
 rtk cargo test          # Cargo test failures only (90%)
-rtk vitest run          # Vitest failures only (99.5%)
+rtk go test             # Go test failures only (90%)
+rtk jest                # Jest failures only (99.5%)
+rtk vitest              # Vitest failures only (99.5%)
 rtk playwright test     # Playwright failures only (94%)
+rtk pytest              # Python test failures only (90%)
+rtk rake test           # Ruby test failures only (90%)
+rtk rspec               # RSpec test failures only (60%)
 rtk test <cmd>          # Generic test wrapper - failures only
 ```
 
@@ -158,7 +164,7 @@ rtk prisma              # Prisma without ASCII art (88%)
 ```bash
 rtk ls <path>           # Tree format, compact (65%)
 rtk read <file>         # Code reading with filtering (60%)
-rtk grep <pattern>      # Search grouped by file (75%)
+rtk grep <pattern>      # Search grouped by file (75%). Format flags (-c, -l, -L, -o, -Z) run raw.
 rtk find <pattern>      # Find grouped by directory (70%)
 ```
 
@@ -190,7 +196,6 @@ rtk wget <url>          # Compact download output (65%)
 
 ### Meta Commands
 ```bash
-rtk --help              # List available commands
 rtk proxy <cmd>         # Run command without filtering (for debugging)
 rtk init                # Add RTK instructions to CLAUDE.md
 rtk init --global       # Add RTK to ~/.claude/CLAUDE.md
@@ -294,62 +299,6 @@ pub fn run(
     Ok(())
 }
 
-/// Prepare hook directory and return paths (hook_dir, hook_path)
-fn prepare_hook_paths() -> Result<(PathBuf, PathBuf)> {
-    let claude_dir = resolve_claude_dir()?;
-    let hook_dir = claude_dir.join("hooks");
-    fs::create_dir_all(&hook_dir)
-        .with_context(|| format!("Failed to create hook directory: {}", hook_dir.display()))?;
-    let hook_path = hook_dir.join(REWRITE_HOOK_FILE);
-    Ok((hook_dir, hook_path))
-}
-
-/// Write hook file if missing or outdated, return true if changed
-#[cfg(unix)]
-fn ensure_hook_installed(hook_path: &Path, verbose: u8) -> Result<bool> {
-    let changed = if hook_path.exists() {
-        let existing = fs::read_to_string(hook_path)
-            .with_context(|| format!("Failed to read existing hook: {}", hook_path.display()))?;
-
-        if existing == REWRITE_HOOK {
-            if verbose > 0 {
-                eprintln!("Hook already up to date: {}", hook_path.display());
-            }
-            false
-        } else {
-            fs::write(hook_path, REWRITE_HOOK)
-                .with_context(|| format!("Failed to write hook to {}", hook_path.display()))?;
-            if verbose > 0 {
-                eprintln!("Updated hook: {}", hook_path.display());
-            }
-            true
-        }
-    } else {
-        fs::write(hook_path, REWRITE_HOOK)
-            .with_context(|| format!("Failed to write hook to {}", hook_path.display()))?;
-        if verbose > 0 {
-            eprintln!("Created hook: {}", hook_path.display());
-        }
-        true
-    };
-
-    // Set executable permissions
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(hook_path, fs::Permissions::from_mode(0o755))
-        .with_context(|| format!("Failed to set hook permissions: {}", hook_path.display()))?;
-
-    // Store SHA-256 hash for runtime integrity verification.
-    // Always store (idempotent) to ensure baseline exists even for
-    // hooks installed before integrity checks were added.
-    integrity::store_hash(hook_path)
-        .with_context(|| format!("Failed to store integrity hash for {}", hook_path.display()))?;
-    if verbose > 0 && changed {
-        eprintln!("Stored integrity hash for hook");
-    }
-
-    Ok(changed)
-}
-
 /// Idempotent file write: create or update if content differs
 fn write_if_changed(path: &Path, content: &str, name: &str, verbose: u8) -> Result<bool> {
     if path.exists() {
@@ -362,7 +311,7 @@ fn write_if_changed(path: &Path, content: &str, name: &str, verbose: u8) -> Resu
             }
             Ok(false)
         } else {
-            fs::write(path, content)
+            atomic_write(path, content)
                 .with_context(|| format!("Failed to write {}: {}", name, path.display()))?;
             if verbose > 0 {
                 eprintln!("Updated {}: {}", name, path.display());
@@ -370,7 +319,7 @@ fn write_if_changed(path: &Path, content: &str, name: &str, verbose: u8) -> Resu
             Ok(true)
         }
     } else {
-        fs::write(path, content)
+        atomic_write(path, content)
             .with_context(|| format!("Failed to write {}: {}", name, path.display()))?;
         if verbose > 0 {
             eprintln!("Created {}: {}", name, path.display());
@@ -434,14 +383,13 @@ fn prompt_user_consent(settings_path: &Path) -> Result<bool> {
     Ok(response == "y" || response == "yes")
 }
 
-/// Print manual instructions for settings.json patching
-fn print_manual_instructions(hook_path: &Path, include_opencode: bool) {
+fn print_manual_instructions(hook_command: &str, include_opencode: bool) {
     println!("\n  MANUAL STEP: Add this to ~/.claude/settings.json:");
     println!("  {{");
     println!("    \"hooks\": {{ \"PreToolUse\": [{{");
     println!("      \"matcher\": \"Bash\",");
     println!("      \"hooks\": [{{ \"type\": \"command\",");
-    println!("        \"command\": \"{}\"", hook_path.display());
+    println!("        \"command\": \"{}\"", hook_command);
     println!("      }}]");
     println!("    }}]}}");
     println!("  }}");
@@ -471,7 +419,8 @@ fn remove_hook_from_json(root: &mut serde_json::Value) -> bool {
         if let Some(hooks_array) = entry.get("hooks").and_then(|h| h.as_array()) {
             for hook in hooks_array {
                 if let Some(command) = hook.get("command").and_then(|c| c.as_str()) {
-                    if command.contains(REWRITE_HOOK_FILE) {
+                    // Match both legacy script path and new binary command
+                    if command.contains(REWRITE_HOOK_FILE) || command == CLAUDE_HOOK_COMMAND {
                         return false;
                     }
                 }
@@ -574,12 +523,12 @@ pub fn uninstall(global: bool, gemini: bool, codex: bool, cursor: bool, verbose:
         return Ok(());
     }
 
-    // 1. Remove hook file
+    // 1. Remove legacy hook file (if exists from old installation)
     let hook_path = claude_dir.join(HOOKS_SUBDIR).join(REWRITE_HOOK_FILE);
     if hook_path.exists() {
         fs::remove_file(&hook_path)
             .with_context(|| format!("Failed to remove hook: {}", hook_path.display()))?;
-        removed.push(format!("Hook: {}", hook_path.display()));
+        removed.push(format!("Hook script: {}", hook_path.display()));
     }
 
     // 1b. Remove integrity hash file
@@ -601,20 +550,47 @@ pub fn uninstall(global: bool, gemini: bool, codex: bool, cursor: bool, verbose:
         let content = fs::read_to_string(&claude_md_path)
             .with_context(|| format!("Failed to read CLAUDE.md: {}", claude_md_path.display()))?;
 
-        if content.contains(RTK_MD_REF) {
-            let new_content = content
+        let mut claude_md_changed = false;
+        let mut working_content = content.clone();
+
+        if working_content.contains(RTK_MD_REF) {
+            let new_content = working_content
                 .lines()
                 .filter(|line| !line.trim().starts_with(RTK_MD_REF))
                 .collect::<Vec<_>>()
                 .join("\n");
 
-            // Clean up double blanks
-            let cleaned = clean_double_blanks(&new_content);
-
-            fs::write(&claude_md_path, cleaned).with_context(|| {
-                format!("Failed to write CLAUDE.md: {}", claude_md_path.display())
-            })?;
+            working_content = clean_double_blanks(&new_content);
+            claude_md_changed = true;
             removed.push("CLAUDE.md: removed @RTK.md reference".to_string());
+        }
+
+        if working_content.contains(RTK_BLOCK_START) {
+            let (cleaned, did_remove) = remove_rtk_block(&working_content);
+            if did_remove {
+                working_content = cleaned;
+                claude_md_changed = true;
+                removed.push("CLAUDE.md: removed rtk-instructions block".to_string());
+            }
+        }
+
+        if claude_md_changed {
+            let trimmed = working_content.trim();
+            if trimmed.is_empty() {
+                // nosemgrep: filesystem-deletion
+                fs::remove_file(&claude_md_path).with_context(|| {
+                    format!(
+                        "Failed to remove empty CLAUDE.md: {}",
+                        claude_md_path.display()
+                    )
+                })?;
+                removed.retain(|r| !r.starts_with("CLAUDE.md:"));
+                removed.push("CLAUDE.md: removed (was empty after cleanup)".to_string());
+            } else {
+                fs::write(&claude_md_path, &working_content).with_context(|| {
+                    format!("Failed to write CLAUDE.md: {}", claude_md_path.display())
+                })?;
+            }
         }
     }
 
@@ -636,6 +612,10 @@ pub fn uninstall(global: bool, gemini: bool, codex: bool, cursor: bool, verbose:
     // Report results
     if removed.is_empty() {
         println!("RTK was not installed (nothing to remove)");
+        println!("  Checked: {}", hook_path.display());
+        println!("  Checked: {}", claude_dir.join(RTK_MD).display());
+        println!("  Checked: {}", claude_md_path.display());
+        println!("  Checked: {}", claude_dir.join(SETTINGS_JSON).display());
     } else {
         println!("RTK uninstalled:");
         for item in removed {
@@ -671,6 +651,7 @@ fn uninstall_codex(global: bool, verbose: u8) -> Result<()> {
 
 fn uninstall_codex_at(codex_dir: &Path, verbose: u8) -> Result<Vec<String>> {
     let mut removed = Vec::new();
+    let absolute_rtk_md_ref = codex_rtk_md_ref(codex_dir);
 
     let rtk_md_path = codex_dir.join(RTK_MD);
     if rtk_md_path.exists() {
@@ -683,26 +664,50 @@ fn uninstall_codex_at(codex_dir: &Path, verbose: u8) -> Result<Vec<String>> {
     }
 
     let agents_md_path = codex_dir.join(AGENTS_MD);
-    if remove_rtk_reference_from_agents(&agents_md_path, verbose)? {
+    if agents_md_path.exists() {
+        let content = fs::read_to_string(&agents_md_path)
+            .with_context(|| format!("Failed to read AGENTS.md: {}", agents_md_path.display()))?;
+
+        let mut working_content = content.clone();
+        let mut agents_changed = false;
+
+        if working_content.contains(RTK_BLOCK_START) {
+            let (cleaned, did_remove) = remove_rtk_block(&working_content);
+            if did_remove {
+                working_content = cleaned;
+                agents_changed = true;
+                removed.push("AGENTS.md: removed rtk-instructions block".to_string());
+            }
+        }
+
+        if agents_changed {
+            atomic_write(&agents_md_path, &working_content).with_context(|| {
+                format!("Failed to write AGENTS.md: {}", agents_md_path.display())
+            })?;
+        }
+    }
+
+    if remove_rtk_reference_from_agents(
+        &agents_md_path,
+        &[RTK_MD_REF, absolute_rtk_md_ref.as_str()],
+        verbose,
+    )? {
         removed.push("AGENTS.md: removed @RTK.md reference".to_string());
     }
 
     Ok(removed)
 }
 
-/// Orchestrator: patch settings.json with RTK hook
+/// Orchestrator: patch settings.json with RTK hook (binary command variant)
 /// Handles reading, checking, prompting, merging, backing up, and atomic writing
-fn patch_settings_json(
-    hook_path: &Path,
+fn patch_settings_json_command(
+    hook_command: &str,
     mode: PatchMode,
     verbose: u8,
     include_opencode: bool,
 ) -> Result<PatchResult> {
     let claude_dir = resolve_claude_dir()?;
     let settings_path = claude_dir.join(SETTINGS_JSON);
-    let hook_command = hook_path
-        .to_str()
-        .context("Hook path contains invalid UTF-8")?;
 
     // Read or create settings.json
     let mut root = if settings_path.exists() {
@@ -730,12 +735,12 @@ fn patch_settings_json(
     // Handle mode
     match mode {
         PatchMode::Skip => {
-            print_manual_instructions(hook_path, include_opencode);
+            print_manual_instructions(hook_command, include_opencode);
             return Ok(PatchResult::Skipped);
         }
         PatchMode::Ask => {
             if !prompt_user_consent(&settings_path)? {
-                print_manual_instructions(hook_path, include_opencode);
+                print_manual_instructions(hook_command, include_opencode);
                 return Ok(PatchResult::Declined);
             }
         }
@@ -744,8 +749,7 @@ fn patch_settings_json(
         }
     }
 
-    // Deep-merge hook
-    insert_hook_entry(&mut root, hook_command);
+    insert_hook_entry(&mut root, hook_command)?;
 
     // Backup original
     if settings_path.exists() {
@@ -810,31 +814,27 @@ fn clean_double_blanks(content: &str) -> String {
 
 /// Deep-merge RTK hook entry into settings.json
 /// Creates hooks.PreToolUse structure if missing, preserves existing hooks
-fn insert_hook_entry(root: &mut serde_json::Value, hook_command: &str) {
-    // Ensure root is an object
+fn insert_hook_entry(root: &mut serde_json::Value, hook_command: &str) -> Result<()> {
     let root_obj = match root.as_object_mut() {
         Some(obj) => obj,
         None => {
             *root = serde_json::json!({});
-            root.as_object_mut()
-                .expect("Just created object, must succeed")
+            root.as_object_mut().expect("just-created json object")
         }
     };
 
-    // Use entry() API for idiomatic insertion
     let hooks = root_obj
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
-        .expect("hooks must be an object");
+        .context("hooks value is not an object")?;
 
     let pre_tool_use = hooks
         .entry(PRE_TOOL_USE_KEY)
         .or_insert_with(|| serde_json::json!([]))
         .as_array_mut()
-        .expect("PreToolUse must be an array");
+        .context("PreToolUse value is not an array")?;
 
-    // Append RTK hook entry
     pre_tool_use.push(serde_json::json!({
         "matcher": "Bash",
         "hooks": [{
@@ -842,10 +842,11 @@ fn insert_hook_entry(root: &mut serde_json::Value, hook_command: &str) {
             "command": hook_command
         }]
     }));
+    Ok(())
 }
 
 /// Check if RTK hook is already present in settings.json
-/// Matches on rtk-rewrite.sh substring to handle different path formats
+/// Matches on legacy rtk-rewrite.sh path OR new `rtk hook claude` command
 fn hook_already_present(root: &serde_json::Value, hook_command: &str) -> bool {
     let pre_tool_use_array = match root
         .get("hooks")
@@ -862,26 +863,11 @@ fn hook_already_present(root: &serde_json::Value, hook_command: &str) -> bool {
         .flatten()
         .filter_map(|hook| hook.get("command")?.as_str())
         .any(|cmd| {
-            cmd == hook_command
-                || (cmd.contains(REWRITE_HOOK_FILE) && hook_command.contains(REWRITE_HOOK_FILE))
+            cmd == hook_command || cmd == CLAUDE_HOOK_COMMAND || cmd.contains(REWRITE_HOOK_FILE)
         })
 }
 
 /// Default mode: hook + slim RTK.md + @RTK.md reference
-#[cfg(not(unix))]
-fn run_default_mode(
-    _global: bool,
-    _patch_mode: PatchMode,
-    _verbose: u8,
-    _install_opencode: bool,
-) -> Result<()> {
-    eprintln!("[warn] Hook-based mode requires Unix (macOS/Linux).");
-    eprintln!("    Windows: use --claude-md mode for full injection.");
-    eprintln!("    Falling back to --claude-md mode.");
-    run_claude_md_mode(_global, _verbose, _install_opencode)
-}
-
-#[cfg(unix)]
 fn run_default_mode(
     global: bool,
     patch_mode: PatchMode,
@@ -899,9 +885,8 @@ fn run_default_mode(
     let rtk_md_path = claude_dir.join(RTK_MD);
     let claude_md_path = claude_dir.join(CLAUDE_MD);
 
-    // 1. Prepare hook directory and install hook
-    let (_hook_dir, hook_path) = prepare_hook_paths()?;
-    let hook_changed = ensure_hook_installed(&hook_path, verbose)?;
+    // 1. Migrate old hook script if present
+    migrate_old_hook_script(verbose);
 
     // 2. Write RTK.md
     write_if_changed(&rtk_md_path, RTK_SLIM, RTK_MD, verbose)?;
@@ -918,13 +903,8 @@ fn run_default_mode(
     let migrated = patch_claude_md(&claude_md_path, verbose)?;
 
     // 4. Print success message
-    let hook_status = if hook_changed {
-        "installed/updated"
-    } else {
-        "already up to date"
-    };
-    println!("\nRTK hook {} (global).\n", hook_status);
-    println!("  Hook:      {}", hook_path.display());
+    println!("\nRTK hook registered (global).\n");
+    println!("  Command:   {}", CLAUDE_HOOK_COMMAND);
     println!("  RTK.md:    {} (10 lines)", rtk_md_path.display());
     if let Some(path) = &opencode_plugin_path {
         println!("  OpenCode:  {}", path.display());
@@ -936,13 +916,14 @@ fn run_default_mode(
         println!("              replaced with @RTK.md (10 lines)");
     }
 
-    // 5. Patch settings.json
-    let patch_result = patch_settings_json(&hook_path, patch_mode, verbose, install_opencode)?;
+    // 5. Patch settings.json with binary command
+    let patch_result =
+        patch_settings_json_command(CLAUDE_HOOK_COMMAND, patch_mode, verbose, install_opencode)?;
 
     // Report result
     match patch_result {
         PatchResult::Patched => {
-            // Already printed by patch_settings_json
+            // Already printed by patch_settings_json_command
         }
         PatchResult::AlreadyPresent => {
             println!("\n  settings.json: hook already present");
@@ -953,7 +934,7 @@ fn run_default_mode(
             }
         }
         PatchResult::Declined | PatchResult::Skipped => {
-            // Manual instructions already printed by patch_settings_json
+            // Manual instructions already printed
         }
     }
 
@@ -963,6 +944,119 @@ fn run_default_mode(
     println!(); // Final newline
 
     Ok(())
+}
+
+/// Migrate old hook script to new binary command.
+/// Deletes `~/.claude/hooks/rtk-rewrite.sh` and `.rtk-hook.sha256` if present,
+/// and removes the stale settings.json entry so the new `rtk hook claude` entry
+/// can be registered.
+fn migrate_old_hook_script(verbose: u8) {
+    if let Some(home) = dirs::home_dir() {
+        let old_hook = home
+            .join(CLAUDE_DIR)
+            .join(HOOKS_SUBDIR)
+            .join(REWRITE_HOOK_FILE);
+        if old_hook.exists() {
+            if let Err(e) = std::fs::remove_file(&old_hook) {
+                if verbose > 0 {
+                    eprintln!("  [warn] Failed to remove old hook script: {e}");
+                }
+            } else {
+                if verbose > 0 {
+                    eprintln!("  [ok] Removed old hook script: {}", old_hook.display());
+                }
+                // Clean up the stale settings.json entry that pointed to the deleted script
+                if let Err(e) = remove_legacy_settings_entries(verbose) {
+                    if verbose > 0 {
+                        eprintln!("  [warn] Failed to clean legacy settings.json entry: {e}");
+                    }
+                }
+            }
+        }
+        // Remove legacy hash file
+        let hash_file = home
+            .join(CLAUDE_DIR)
+            .join(HOOKS_SUBDIR)
+            .join(".rtk-hook.sha256");
+        if hash_file.exists() {
+            let _ = std::fs::remove_file(&hash_file);
+        }
+        // Remove Cursor legacy hook
+        let cursor_hook = home.join(CURSOR_DIR).join("hooks").join(REWRITE_HOOK_FILE);
+        if cursor_hook.exists() {
+            let _ = std::fs::remove_file(&cursor_hook);
+        }
+    }
+}
+
+/// Remove only legacy `rtk-rewrite.sh` entries from settings.json.
+/// Preserves any existing `rtk hook claude` entries (new format).
+fn remove_legacy_settings_entries(verbose: u8) -> Result<()> {
+    let claude_dir = resolve_claude_dir()?;
+    let settings_path = claude_dir.join(SETTINGS_JSON);
+
+    if !settings_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&settings_path)
+        .with_context(|| format!("Failed to read {}", settings_path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let mut root: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", settings_path.display()))?;
+
+    if !remove_legacy_hook_entries_from_json(&mut root) {
+        return Ok(());
+    }
+
+    // Backup before modifying
+    let backup_path = settings_path.with_extension("json.bak");
+    fs::copy(&settings_path, &backup_path)
+        .with_context(|| format!("Failed to backup to {}", backup_path.display()))?;
+
+    let serialized =
+        serde_json::to_string_pretty(&root).context("Failed to serialize settings.json")?;
+    atomic_write(&settings_path, &serialized)?;
+
+    if verbose > 0 {
+        eprintln!("  [ok] Removed legacy rtk-rewrite.sh entry from settings.json");
+    }
+    Ok(())
+}
+
+/// Remove only legacy `rtk-rewrite.sh` hook entries from a parsed settings.json.
+/// Returns true if any entries were removed.
+/// Does NOT remove `rtk hook claude` entries — those are the new format.
+fn remove_legacy_hook_entries_from_json(root: &mut serde_json::Value) -> bool {
+    let pre_tool_use_array = match root
+        .get_mut("hooks")
+        .and_then(|h| h.get_mut(PRE_TOOL_USE_KEY))
+        .and_then(|p| p.as_array_mut())
+    {
+        Some(arr) => arr,
+        None => return false,
+    };
+
+    let original_len = pre_tool_use_array.len();
+    pre_tool_use_array.retain(|entry| {
+        let dominated_by_legacy = entry
+            .get("hooks")
+            .and_then(|h| h.as_array())
+            .map(|hooks| {
+                hooks.iter().all(|hook| {
+                    hook.get("command")
+                        .and_then(|c| c.as_str())
+                        .is_some_and(|cmd| cmd.contains(REWRITE_HOOK_FILE))
+                })
+            })
+            .unwrap_or(false);
+        !dominated_by_legacy
+    });
+
+    pre_tool_use_array.len() < original_len
 }
 
 /// Generate .rtk/filters.toml template in the current directory if not present.
@@ -1015,17 +1109,6 @@ fn generate_global_filters_template(verbose: u8) -> Result<()> {
 }
 
 /// Hook-only mode: just the hook, no RTK.md
-#[cfg(not(unix))]
-fn run_hook_only_mode(
-    _global: bool,
-    _patch_mode: PatchMode,
-    _verbose: u8,
-    _install_opencode: bool,
-) -> Result<()> {
-    anyhow::bail!("Hook install requires Unix (macOS/Linux). Use WSL or --claude-md mode.")
-}
-
-#[cfg(unix)]
 fn run_hook_only_mode(
     global: bool,
     patch_mode: PatchMode,
@@ -1038,9 +1121,8 @@ fn run_hook_only_mode(
         return Ok(());
     }
 
-    // Prepare and install hook
-    let (_hook_dir, hook_path) = prepare_hook_paths()?;
-    let hook_changed = ensure_hook_installed(&hook_path, verbose)?;
+    // Migrate old hook script if present
+    migrate_old_hook_script(verbose);
 
     let opencode_plugin_path = if install_opencode {
         let path = prepare_opencode_plugin_path()?;
@@ -1050,27 +1132,21 @@ fn run_hook_only_mode(
         None
     };
 
-    let hook_status = if hook_changed {
-        "installed/updated"
-    } else {
-        "already up to date"
-    };
-    println!("\nRTK hook {} (hook-only mode).\n", hook_status);
-    println!("  Hook: {}", hook_path.display());
+    println!("\nRTK hook registered (hook-only mode).\n");
+    println!("  Command: {}", CLAUDE_HOOK_COMMAND);
     if let Some(path) = &opencode_plugin_path {
         println!("  OpenCode: {}", path.display());
     }
-    println!(
-        "  Note: No RTK.md created. Claude won't know about meta commands (gain, discover, proxy)."
-    );
+    println!("  Note: No RTK.md created. Claude won't know about meta commands (proxy).");
 
-    // Patch settings.json
-    let patch_result = patch_settings_json(&hook_path, patch_mode, verbose, install_opencode)?;
+    // Patch settings.json with binary command
+    let patch_result =
+        patch_settings_json_command(CLAUDE_HOOK_COMMAND, patch_mode, verbose, install_opencode)?;
 
     // Report result
     match patch_result {
         PatchResult::Patched => {
-            // Already printed by patch_settings_json
+            // Already printed by patch_settings_json_command
         }
         PatchResult::AlreadyPresent => {
             println!("\n  settings.json: hook already present");
@@ -1081,7 +1157,7 @@ fn run_hook_only_mode(
             }
         }
         PatchResult::Declined | PatchResult::Skipped => {
-            // Manual instructions already printed by patch_settings_json
+            // Manual instructions already printed
         }
     }
 
@@ -1131,14 +1207,15 @@ fn run_claude_md_mode(global: bool, verbose: u8, install_opencode: bool) -> Resu
             }
             RtkBlockUpsert::Malformed => {
                 eprintln!(
-                    "[warn] Warning: Found '<!-- rtk-instructions' without closing marker in {}",
+                    "[warn] Warning: Found '{}' without closing marker in {}",
+                    RTK_BLOCK_START,
                     path.display()
                 );
 
                 if let Some((line_num, _)) = existing
                     .lines()
                     .enumerate()
-                    .find(|(_, line)| line.contains("<!-- rtk-instructions"))
+                    .find(|(_, line)| line.contains(RTK_BLOCK_START))
                 {
                     eprintln!("    Location: line {}", line_num + 1);
                 }
@@ -1243,6 +1320,86 @@ fn run_windsurf_mode(verbose: u8) -> Result<()> {
     Ok(())
 }
 
+// ─── Kilo Code support ────────────────────────────────────────
+
+const KILOCODE_RULES: &str = include_str!("../../hooks/kilocode/rules.md");
+
+pub fn run_kilocode_mode(verbose: u8) -> Result<()> {
+    run_kilocode_mode_at(&std::env::current_dir()?, verbose)
+}
+
+fn run_kilocode_mode_at(base_dir: &Path, verbose: u8) -> Result<()> {
+    // Kilo Code reads .kilocode/rules/ from the project root (workspace-scoped)
+    let target_dir = base_dir.join(".kilocode/rules");
+    let rules_path = target_dir.join("rtk-rules.md");
+
+    let existing = fs::read_to_string(&rules_path).unwrap_or_default();
+    if existing.contains("RTK") || existing.contains("rtk") {
+        println!("\nRTK already configured for Kilo Code in this project.\n");
+        println!("  Rules: .kilocode/rules/rtk-rules.md (already present)");
+    } else {
+        fs::create_dir_all(&target_dir).context("Failed to create .kilocode/rules directory")?;
+        let new_content = if existing.trim().is_empty() {
+            KILOCODE_RULES.to_string()
+        } else {
+            format!("{}\n\n{}", existing.trim(), KILOCODE_RULES)
+        };
+        fs::write(&rules_path, &new_content)
+            .context("Failed to write .kilocode/rules/rtk-rules.md")?;
+
+        if verbose > 0 {
+            eprintln!("Wrote .kilocode/rules/rtk-rules.md");
+        }
+
+        println!("\nRTK configured for Kilo Code.\n");
+        println!("  Rules: .kilocode/rules/rtk-rules.md (installed)");
+    }
+    println!("  Kilo Code will now use rtk commands for token savings.");
+    println!("  Test with: git status\n");
+
+    Ok(())
+}
+
+// ─── Google Antigravity support ───────────────────────────────
+
+const ANTIGRAVITY_RULES: &str = include_str!("../../hooks/antigravity/rules.md");
+
+pub fn run_antigravity_mode(verbose: u8) -> Result<()> {
+    run_antigravity_mode_at(&std::env::current_dir()?, verbose)
+}
+
+fn run_antigravity_mode_at(base_dir: &Path, verbose: u8) -> Result<()> {
+    // Antigravity reads .agents/rules/ from the project root (workspace-scoped)
+    let target_dir = base_dir.join(".agents/rules");
+    let rules_path = target_dir.join("antigravity-rtk-rules.md");
+
+    let existing = fs::read_to_string(&rules_path).unwrap_or_default();
+    if existing.contains("RTK") || existing.contains("rtk") {
+        println!("\nRTK already configured for Antigravity in this project.\n");
+        println!("  Rules: .agents/rules/antigravity-rtk-rules.md (already present)");
+    } else {
+        fs::create_dir_all(&target_dir).context("Failed to create .agents/rules directory")?;
+        let new_content = if existing.trim().is_empty() {
+            ANTIGRAVITY_RULES.to_string()
+        } else {
+            format!("{}\n\n{}", existing.trim(), ANTIGRAVITY_RULES)
+        };
+        fs::write(&rules_path, &new_content)
+            .context("Failed to write .agents/rules/antigravity-rtk-rules.md")?;
+
+        if verbose > 0 {
+            eprintln!("Wrote .agents/rules/antigravity-rtk-rules.md");
+        }
+
+        println!("\nRTK configured for Google Antigravity.\n");
+        println!("  Rules: .agents/rules/antigravity-rtk-rules.md (installed)");
+    }
+    println!("  Antigravity will now use rtk commands for token savings.");
+    println!("  Test with: git status\n");
+
+    Ok(())
+}
+
 fn run_codex_mode(global: bool, verbose: u8) -> Result<()> {
     let (agents_md_path, rtk_md_path) = if global {
         let codex_dir = resolve_codex_dir()?;
@@ -1251,6 +1408,15 @@ fn run_codex_mode(global: bool, verbose: u8) -> Result<()> {
         (PathBuf::from(AGENTS_MD), PathBuf::from(RTK_MD))
     };
 
+    run_codex_mode_with_paths(agents_md_path, rtk_md_path, global, verbose)
+}
+
+fn run_codex_mode_with_paths(
+    agents_md_path: PathBuf,
+    rtk_md_path: PathBuf,
+    global: bool,
+    verbose: u8,
+) -> Result<()> {
     if global {
         if let Some(parent) = agents_md_path.parent() {
             fs::create_dir_all(parent).with_context(|| {
@@ -1266,7 +1432,11 @@ fn run_codex_mode(global: bool, verbose: u8) -> Result<()> {
     // from any CWD (worktrees, nested projects). Codex resolves @ references
     // relative to CWD, not the AGENTS.md file location.
     let rtk_md_ref = if global {
-        format!("@{}", rtk_md_path.display())
+        codex_rtk_md_ref(
+            rtk_md_path
+                .parent()
+                .context("RTK.md path missing parent directory")?,
+        )
     } else {
         RTK_MD_REF.to_string()
     };
@@ -1315,8 +1485,8 @@ enum RtkBlockUpsert {
 /// Returns `(new_content, action)` describing what happened.
 /// The caller decides whether to write `new_content` based on `action`.
 fn upsert_rtk_block(content: &str, block: &str) -> (String, RtkBlockUpsert) {
-    let start_marker = "<!-- rtk-instructions";
-    let end_marker = "<!-- /rtk-instructions -->";
+    let start_marker = RTK_BLOCK_START;
+    let end_marker = RTK_BLOCK_END;
 
     if let Some(start) = content.find(start_marker) {
         if let Some(relative_end) = content[start..].find(end_marker) {
@@ -1370,7 +1540,7 @@ fn patch_claude_md(path: &Path, verbose: u8) -> Result<bool> {
     let mut migrated = false;
 
     // Check for old block and migrate
-    if content.contains("<!-- rtk-instructions") {
+    if content.contains(RTK_BLOCK_START) {
         let (new_content, did_migrate) = remove_rtk_block(&content);
         if did_migrate {
             content = new_content;
@@ -1418,7 +1588,7 @@ fn patch_agents_md(path: &Path, rtk_md_ref: &str, verbose: u8) -> Result<bool> {
     };
 
     let mut migrated = false;
-    if content.contains("<!-- rtk-instructions") {
+    if content.contains(RTK_BLOCK_START) {
         let (new_content, did_migrate) = remove_rtk_block(&content);
         if did_migrate {
             content = new_content;
@@ -1467,20 +1637,30 @@ fn patch_agents_md(path: &Path, rtk_md_ref: &str, verbose: u8) -> Result<bool> {
     Ok(true)
 }
 
-fn remove_rtk_reference_from_agents(path: &Path, verbose: u8) -> Result<bool> {
+fn has_rtk_reference(content: &str, refs: &[&str]) -> bool {
+    content
+        .lines()
+        .map(str::trim)
+        .any(|line| refs.contains(&line))
+}
+
+fn remove_rtk_reference_from_agents(path: &Path, refs: &[&str], verbose: u8) -> Result<bool> {
     if !path.exists() {
         return Ok(false);
     }
 
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read AGENTS.md: {}", path.display()))?;
-    if !content.contains(RTK_MD_REF) {
+    if !has_rtk_reference(&content, refs) {
         return Ok(false);
     }
 
     let new_content = content
         .lines()
-        .filter(|line| !line.trim().starts_with(RTK_MD_REF))
+        .filter(|line| {
+            let trimmed = line.trim();
+            !refs.contains(&trimmed)
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let cleaned = clean_double_blanks(&new_content);
@@ -1489,7 +1669,7 @@ fn remove_rtk_reference_from_agents(path: &Path, verbose: u8) -> Result<bool> {
 
     if verbose > 0 {
         eprintln!(
-            "Removed @RTK.md reference from AGENTS.md: {}",
+            "Removed RTK.md reference from AGENTS.md: {}",
             path.display()
         );
     }
@@ -1499,30 +1679,29 @@ fn remove_rtk_reference_from_agents(path: &Path, verbose: u8) -> Result<bool> {
 
 /// Remove old RTK block from CLAUDE.md (migration helper)
 fn remove_rtk_block(content: &str) -> (String, bool) {
-    if let (Some(start), Some(end)) = (
-        content.find("<!-- rtk-instructions"),
-        content.find("<!-- /rtk-instructions -->"),
-    ) {
-        let end_pos = end + "<!-- /rtk-instructions -->".len();
+    if let (Some(start), Some(end)) = (content.find(RTK_BLOCK_START), content.find(RTK_BLOCK_END)) {
+        let end_pos = end + RTK_BLOCK_END.len();
         let before = content[..start].trim_end();
         let after = content[end_pos..].trim_start();
 
         let result = if after.is_empty() {
-            before.to_string()
+            format!("{}\n", before)
         } else {
             format!("{}\n\n{}", before, after)
         };
 
         (result, true) // migrated
-    } else if content.contains("<!-- rtk-instructions") {
-        eprintln!("[warn] Warning: Found '<!-- rtk-instructions' without closing marker.");
+    } else if content.contains(RTK_BLOCK_START) {
+        eprintln!(
+            "[warn] Warning: Found '{}' without closing marker.",
+            RTK_BLOCK_START
+        );
         eprintln!("    This can happen if CLAUDE.md was manually edited.");
 
-        // Find line number
         if let Some((line_num, _)) = content
             .lines()
             .enumerate()
-            .find(|(_, line)| line.contains("<!-- rtk-instructions"))
+            .find(|(_, line)| line.contains(RTK_BLOCK_START))
         {
             eprintln!("    Location: line {}", line_num + 1);
         }
@@ -1538,24 +1717,51 @@ fn remove_rtk_block(content: &str) -> (String, bool) {
 fn resolve_home_subdir(subdir: &str) -> Result<PathBuf> {
     dirs::home_dir()
         .map(|h| h.join(subdir))
-        .context("Cannot determine home directory. Is $HOME set?")
+        .context(if cfg!(windows) {
+            "Cannot determine home directory. Is %USERPROFILE% set?"
+        } else {
+            "Cannot determine home directory. Is $HOME set?"
+        })
 }
 
 fn resolve_claude_dir() -> Result<PathBuf> {
+    if let Ok(dir) = std::env::var("RTK_CLAUDE_DIR") {
+        return Ok(PathBuf::from(dir));
+    }
     resolve_home_subdir(CLAUDE_DIR)
 }
 
 fn resolve_codex_dir() -> Result<PathBuf> {
-    resolve_home_subdir(".codex")
+    resolve_codex_dir_from(
+        std::env::var_os("CODEX_HOME").map(PathBuf::from),
+        dirs::home_dir(),
+    )
+}
+
+fn resolve_codex_dir_from(
+    codex_home: Option<PathBuf>,
+    home_dir: Option<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(path) = codex_home.filter(|path| !path.as_os_str().is_empty()) {
+        return Ok(path);
+    }
+
+    home_dir
+        .map(|home| home.join(CODEX_DIR))
+        .context("Cannot determine Codex config directory. Set $CODEX_HOME or $HOME.")
+}
+
+fn codex_rtk_md_ref(codex_dir: &Path) -> String {
+    format!("@{}", codex_dir.join(RTK_MD).display())
 }
 
 fn resolve_opencode_dir() -> Result<PathBuf> {
-    resolve_home_subdir(".config/opencode")
+    resolve_home_subdir(CONFIG_DIR).map(|p| p.join(OPENCODE_SUBDIR))
 }
 
 /// Return OpenCode plugin path: ~/.config/opencode/plugins/rtk.ts
 fn opencode_plugin_path(opencode_dir: &Path) -> PathBuf {
-    opencode_dir.join("plugins").join("rtk.ts")
+    opencode_dir.join(PLUGIN_SUBDIR).join(OPENCODE_PLUGIN_FILE)
 }
 
 /// Prepare OpenCode plugin directory and return install path
@@ -1599,47 +1805,39 @@ fn remove_opencode_plugin(verbose: u8) -> Result<Vec<PathBuf>> {
 // ─── Cursor Agent support ─────────────────────────────────────────────
 
 fn resolve_cursor_dir() -> Result<PathBuf> {
-    resolve_home_subdir(".cursor")
+    resolve_home_subdir(CURSOR_DIR)
 }
 
-/// Install Cursor hooks: hook script + hooks.json
+/// Install Cursor hooks: register binary command in hooks.json
 fn install_cursor_hooks(verbose: u8) -> Result<()> {
     let cursor_dir = resolve_cursor_dir()?;
-    let hooks_dir = cursor_dir.join("hooks");
-    fs::create_dir_all(&hooks_dir).with_context(|| {
-        format!(
-            "Failed to create Cursor hooks directory: {}",
-            hooks_dir.display()
-        )
-    })?;
 
-    // 1. Write hook script
-    let hook_path = hooks_dir.join(REWRITE_HOOK_FILE);
-    let hook_changed = write_if_changed(&hook_path, CURSOR_REWRITE_HOOK, "Cursor hook", verbose)?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).with_context(|| {
-            format!(
-                "Failed to set Cursor hook permissions: {}",
-                hook_path.display()
-            )
-        })?;
+    // Migrate old hook script if present
+    let old_hook = cursor_dir.join("hooks").join(REWRITE_HOOK_FILE);
+    if old_hook.exists() {
+        let _ = fs::remove_file(&old_hook);
+        if verbose > 0 {
+            eprintln!(
+                "  [ok] Removed old Cursor hook script: {}",
+                old_hook.display()
+            );
+        }
+        // Clean stale hooks.json entry pointing to the deleted script
+        let hooks_json_path = cursor_dir.join(HOOKS_JSON);
+        if let Err(e) = remove_legacy_cursor_hooks_json_entries(&hooks_json_path, verbose) {
+            if verbose > 0 {
+                eprintln!("  [warn] Failed to clean legacy Cursor hooks.json entry: {e}");
+            }
+        }
     }
 
-    // 2. Create or patch hooks.json
+    // Create or patch hooks.json with binary command
     let hooks_json_path = cursor_dir.join(HOOKS_JSON);
     let patched = patch_cursor_hooks_json(&hooks_json_path, verbose)?;
 
     // Report
-    let hook_status = if hook_changed {
-        "installed/updated"
-    } else {
-        "already up to date"
-    };
-    println!("\nCursor hook {} (global).\n", hook_status);
-    println!("  Hook:       {}", hook_path.display());
+    println!("\nCursor hook registered (global).\n");
+    println!("  Command:    {}", CURSOR_HOOK_COMMAND);
     println!("  hooks.json: {}", hooks_json_path.display());
 
     if patched {
@@ -1677,8 +1875,7 @@ fn patch_cursor_hooks_json(path: &Path, verbose: u8) -> Result<bool> {
         return Ok(false);
     }
 
-    // Insert the RTK preToolUse entry
-    insert_cursor_hook_entry(&mut root);
+    insert_cursor_hook_entry(&mut root)?;
 
     // Backup if exists
     if path.exists() {
@@ -1699,6 +1896,7 @@ fn patch_cursor_hooks_json(path: &Path, verbose: u8) -> Result<bool> {
 }
 
 /// Check if RTK preToolUse hook is already present in Cursor hooks.json
+/// Matches on legacy rtk-rewrite.sh path OR new `rtk hook cursor` command
 fn cursor_hook_already_present(root: &serde_json::Value) -> bool {
     let hooks = match root
         .get("hooks")
@@ -1713,40 +1911,93 @@ fn cursor_hook_already_present(root: &serde_json::Value) -> bool {
         entry
             .get("command")
             .and_then(|c| c.as_str())
-            .is_some_and(|cmd| cmd.contains(REWRITE_HOOK_FILE))
+            .is_some_and(|cmd| cmd.contains(REWRITE_HOOK_FILE) || cmd == CURSOR_HOOK_COMMAND)
     })
 }
 
 /// Insert RTK preToolUse entry into Cursor hooks.json
-fn insert_cursor_hook_entry(root: &mut serde_json::Value) {
+fn insert_cursor_hook_entry(root: &mut serde_json::Value) -> Result<()> {
     let root_obj = match root.as_object_mut() {
         Some(obj) => obj,
         None => {
             *root = serde_json::json!({ "version": 1 });
-            root.as_object_mut()
-                .expect("Just created object, must succeed")
+            root.as_object_mut().expect("just-created json object")
         }
     };
 
-    // Ensure version key
     root_obj.entry("version").or_insert(serde_json::json!(1));
 
     let hooks = root_obj
         .entry("hooks")
         .or_insert_with(|| serde_json::json!({}))
         .as_object_mut()
-        .expect("hooks must be an object");
+        .context("hooks value is not an object")?;
 
     let pre_tool_use = hooks
         .entry("preToolUse")
         .or_insert_with(|| serde_json::json!([]))
         .as_array_mut()
-        .expect("preToolUse must be an array");
+        .context("preToolUse value is not an array")?;
 
     pre_tool_use.push(serde_json::json!({
-        "command": "./hooks/rtk-rewrite.sh",
+        "command": CURSOR_HOOK_COMMAND,
         "matcher": "Shell"
     }));
+    Ok(())
+}
+
+/// Remove only legacy `rtk-rewrite.sh` entries from Cursor hooks.json.
+/// Preserves any existing `rtk hook cursor` entries (new format).
+fn remove_legacy_cursor_hooks_json_entries(path: &Path, verbose: u8) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let content =
+        fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
+    if content.trim().is_empty() {
+        return Ok(());
+    }
+
+    let mut root: serde_json::Value = serde_json::from_str(&content)
+        .with_context(|| format!("Failed to parse {}", path.display()))?;
+
+    if !remove_legacy_cursor_hook_entries_from_json(&mut root) {
+        return Ok(());
+    }
+
+    let serialized =
+        serde_json::to_string_pretty(&root).context("Failed to serialize hooks.json")?;
+    atomic_write(path, &serialized)?;
+
+    if verbose > 0 {
+        eprintln!("  [ok] Removed legacy rtk-rewrite.sh entry from Cursor hooks.json");
+    }
+    Ok(())
+}
+
+/// Remove only legacy `rtk-rewrite.sh` entries from parsed Cursor hooks.json.
+/// Returns true if any entries were removed.
+/// Does NOT remove `rtk hook cursor` entries — those are the new format.
+fn remove_legacy_cursor_hook_entries_from_json(root: &mut serde_json::Value) -> bool {
+    let pre_tool_use = match root
+        .get_mut("hooks")
+        .and_then(|h| h.get_mut("preToolUse"))
+        .and_then(|p| p.as_array_mut())
+    {
+        Some(arr) => arr,
+        None => return false,
+    };
+
+    let original_len = pre_tool_use.len();
+    pre_tool_use.retain(|entry| {
+        !entry
+            .get("command")
+            .and_then(|c| c.as_str())
+            .is_some_and(|cmd| cmd.contains(REWRITE_HOOK_FILE))
+    });
+
+    pre_tool_use.len() < original_len
 }
 
 /// Remove Cursor RTK artifacts: hook script + hooks.json entry
@@ -1793,6 +2044,7 @@ fn remove_cursor_hooks(verbose: u8) -> Result<Vec<String>> {
 
 /// Remove RTK preToolUse entry from Cursor hooks.json
 /// Returns true if entry was found and removed
+/// Matches both legacy script path and new binary command
 fn remove_cursor_hook_from_json(root: &mut serde_json::Value) -> bool {
     let pre_tool_use = match root
         .get_mut("hooks")
@@ -1808,7 +2060,7 @@ fn remove_cursor_hook_from_json(root: &mut serde_json::Value) -> bool {
         !entry
             .get("command")
             .and_then(|c| c.as_str())
-            .is_some_and(|cmd| cmd.contains(REWRITE_HOOK_FILE))
+            .is_some_and(|cmd| cmd.contains(REWRITE_HOOK_FILE) || cmd == CURSOR_HOOK_COMMAND)
     });
 
     pre_tool_use.len() < original_len
@@ -1832,8 +2084,22 @@ fn show_claude_config() -> Result<()> {
 
     println!("rtk Configuration:\n");
 
-    // Check hook
-    if hook_path.exists() {
+    // Check hook: prefer binary command detection, fall back to script file
+    let settings_path = claude_dir.join(SETTINGS_JSON);
+    let binary_hook_registered = if settings_path.exists() {
+        let content = fs::read_to_string(&settings_path).unwrap_or_default();
+        if let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) {
+            hook_already_present(&root, CLAUDE_HOOK_COMMAND)
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if binary_hook_registered {
+        println!("[ok] Hook: {} (native binary command)", CLAUDE_HOOK_COMMAND);
+    } else if hook_path.exists() {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1854,15 +2120,12 @@ fn show_claude_config() -> Result<()> {
                 );
             } else if !is_thin_delegator {
                 println!(
-                    "[warn] Hook: {} (outdated — inline logic, not thin delegator)",
+                    "[warn] Hook: {} (outdated — run `rtk init -g` to upgrade to native binary)",
                     hook_path.display()
-                );
-                println!(
-                    "   → Run `rtk init --global` to upgrade to the single source of truth hook"
                 );
             } else if is_executable && has_guards {
                 println!(
-                    "[ok] Hook: {} (thin delegator, version {})",
+                    "[warn] Hook: {} (legacy script v{} — run `rtk init -g` to upgrade)",
                     hook_path.display(),
                     hook_version
                 );
@@ -1876,7 +2139,10 @@ fn show_claude_config() -> Result<()> {
 
         #[cfg(not(unix))]
         {
-            println!("[ok] Hook: {} (exists)", hook_path.display());
+            println!(
+                "[warn] Hook: {} (legacy script — run `rtk init -g` to upgrade)",
+                hook_path.display()
+            );
         }
     } else {
         println!("[--] Hook: not found");
@@ -1889,23 +2155,25 @@ fn show_claude_config() -> Result<()> {
         println!("[--] RTK.md: not found");
     }
 
-    // Check hook integrity
-    match integrity::verify_hook_at(&hook_path) {
-        Ok(integrity::IntegrityStatus::Verified) => {
-            println!("[ok] Integrity: hook hash verified");
-        }
-        Ok(integrity::IntegrityStatus::Tampered { .. }) => {
-            println!("[FAIL] Integrity: hook modified outside rtk init (run: rtk verify)");
-        }
-        Ok(integrity::IntegrityStatus::NoBaseline) => {
-            println!("[warn] Integrity: no baseline hash (run: rtk init -g to establish)");
-        }
-        Ok(integrity::IntegrityStatus::NotInstalled)
-        | Ok(integrity::IntegrityStatus::OrphanedHash) => {
-            // Don't show integrity line if hook isn't installed
-        }
-        Err(_) => {
-            println!("[warn] Integrity: check failed");
+    // Check hook integrity (only relevant for legacy script hooks)
+    if hook_path.exists() && !binary_hook_registered {
+        match integrity::verify_hook_at(&hook_path) {
+            Ok(integrity::IntegrityStatus::Verified) => {
+                println!("[ok] Integrity: hook hash verified");
+            }
+            Ok(integrity::IntegrityStatus::Tampered { .. }) => {
+                println!("[FAIL] Integrity: hook modified outside rtk init (run: rtk verify)");
+            }
+            Ok(integrity::IntegrityStatus::NoBaseline) => {
+                println!("[warn] Integrity: no baseline hash (run: rtk init -g to establish)");
+            }
+            Ok(integrity::IntegrityStatus::NotInstalled)
+            | Ok(integrity::IntegrityStatus::OrphanedHash) => {
+                // Don't show integrity line if hook isn't installed
+            }
+            Err(_) => {
+                println!("[warn] Integrity: check failed");
+            }
         }
     }
 
@@ -1914,7 +2182,7 @@ fn show_claude_config() -> Result<()> {
         let content = fs::read_to_string(&global_claude_md)?;
         if content.contains(RTK_MD_REF) {
             println!("[ok] Global (~/.claude/CLAUDE.md): @RTK.md reference");
-        } else if content.contains("<!-- rtk-instructions") {
+        } else if content.contains(RTK_BLOCK_START) {
             println!(
                 "[warn] Global (~/.claude/CLAUDE.md): old RTK block (run: rtk init -g to migrate)"
             );
@@ -1937,14 +2205,12 @@ fn show_claude_config() -> Result<()> {
         println!("[--] Local (./CLAUDE.md): not found");
     }
 
-    // Check settings.json
-    let settings_path = claude_dir.join(SETTINGS_JSON);
+    // Check settings.json (detailed status)
     if settings_path.exists() {
         let content = fs::read_to_string(&settings_path)?;
         if !content.trim().is_empty() {
             if let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) {
-                let hook_command = hook_path.display().to_string();
-                if hook_already_present(&root, &hook_command) {
+                if hook_already_present(&root, CLAUDE_HOOK_COMMAND) {
                     println!("[ok] settings.json: RTK hook configured");
                 } else {
                     println!("[warn] settings.json: exists but RTK hook not configured");
@@ -1977,28 +2243,37 @@ fn show_claude_config() -> Result<()> {
         let cursor_hook = cursor_dir.join(HOOKS_SUBDIR).join(REWRITE_HOOK_FILE);
         let cursor_hooks_json = cursor_dir.join(HOOKS_JSON);
 
-        if cursor_hook.exists() {
+        // Check for binary command in hooks.json first
+        let cursor_binary_registered = if cursor_hooks_json.exists() {
+            let content = fs::read_to_string(&cursor_hooks_json).unwrap_or_default();
+            if let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) {
+                cursor_hook_already_present(&root)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if cursor_binary_registered {
+            println!("[ok] Cursor hook: registered in hooks.json");
+        } else if cursor_hook.exists() {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
                 let meta = fs::metadata(&cursor_hook)?;
                 let is_executable = meta.permissions().mode() & 0o111 != 0;
                 let content = fs::read_to_string(&cursor_hook)?;
-                let is_thin = content.contains("rtk rewrite");
+                let _is_thin = content.contains("rtk rewrite");
 
                 if !is_executable {
                     println!(
-                        "[warn] Cursor hook: {} (NOT executable - run: chmod +x)",
-                        cursor_hook.display()
-                    );
-                } else if is_thin {
-                    println!(
-                        "[ok] Cursor hook: {} (thin delegator)",
+                        "[warn] Cursor hook: {} (legacy script, NOT executable)",
                         cursor_hook.display()
                     );
                 } else {
                     println!(
-                        "[warn] Cursor hook: {} (outdated - missing rtk rewrite delegation)",
+                        "[warn] Cursor hook: {} (legacy script — run `rtk init -g --agent cursor` to upgrade)",
                         cursor_hook.display()
                     );
                 }
@@ -2006,30 +2281,10 @@ fn show_claude_config() -> Result<()> {
 
             #[cfg(not(unix))]
             {
-                println!("[ok] Cursor hook: {} (exists)", cursor_hook.display());
+                println!("[warn] Cursor hook: {} (legacy script — run `rtk init -g --agent cursor` to upgrade)", cursor_hook.display());
             }
         } else {
             println!("[--] Cursor hook: not found");
-        }
-
-        if cursor_hooks_json.exists() {
-            let content = fs::read_to_string(&cursor_hooks_json)?;
-            if !content.trim().is_empty() {
-                if let Ok(root) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if cursor_hook_already_present(&root) {
-                        println!("[ok] Cursor hooks.json: RTK preToolUse configured");
-                    } else {
-                        println!("[warn] Cursor hooks.json: exists but RTK not configured");
-                        println!("    Run: rtk init -g --agent cursor");
-                    }
-                } else {
-                    println!("[warn] Cursor hooks.json: exists but invalid JSON");
-                }
-            } else {
-                println!("[--] Cursor hooks.json: empty");
-            }
-        } else {
-            println!("[--] Cursor hooks.json: not found");
         }
     } else {
         println!("[--] Cursor: home dir not found");
@@ -2044,7 +2299,7 @@ fn show_claude_config() -> Result<()> {
     println!("  rtk init -g --claude-md     # Legacy: full injection into ~/.claude/CLAUDE.md");
     println!("  rtk init -g --hook-only     # Hook only, no RTK.md");
     println!("  rtk init --codex            # Configure local AGENTS.md + RTK.md");
-    println!("  rtk init -g --codex         # Configure ~/.codex/AGENTS.md + ~/.codex/RTK.md");
+    println!("  rtk init -g --codex         # Configure $CODEX_HOME/AGENTS.md + $CODEX_HOME/RTK.md (or ~/.codex/)");
     println!("  rtk init -g --opencode      # OpenCode plugin only");
     println!("  rtk init -g --agent cursor  # Install Cursor Agent hooks");
 
@@ -2055,6 +2310,7 @@ fn show_codex_config() -> Result<()> {
     let codex_dir = resolve_codex_dir()?;
     let global_agents_md = codex_dir.join(AGENTS_MD);
     let global_rtk_md = codex_dir.join(RTK_MD);
+    let global_rtk_md_ref = codex_rtk_md_ref(&codex_dir);
     let local_agents_md = PathBuf::from(AGENTS_MD);
     let local_rtk_md = PathBuf::from(RTK_MD);
 
@@ -2068,9 +2324,9 @@ fn show_codex_config() -> Result<()> {
 
     if global_agents_md.exists() {
         let content = fs::read_to_string(&global_agents_md)?;
-        if content.contains(RTK_MD_REF) {
-            println!("[ok] Global AGENTS.md: @RTK.md reference");
-        } else if content.contains("<!-- rtk-instructions") {
+        if has_rtk_reference(&content, &[RTK_MD_REF, global_rtk_md_ref.as_str()]) {
+            println!("[ok] Global AGENTS.md: RTK.md reference");
+        } else if content.contains(RTK_BLOCK_START) {
             println!("[!!] Global AGENTS.md: old inline RTK block");
         } else {
             println!("[--] Global AGENTS.md: exists but rtk not configured");
@@ -2087,9 +2343,9 @@ fn show_codex_config() -> Result<()> {
 
     if local_agents_md.exists() {
         let content = fs::read_to_string(&local_agents_md)?;
-        if content.contains(RTK_MD_REF) {
+        if has_rtk_reference(&content, &[RTK_MD_REF]) {
             println!("[ok] Local AGENTS.md: @RTK.md reference");
-        } else if content.contains("<!-- rtk-instructions") {
+        } else if content.contains(RTK_BLOCK_START) {
             println!("[!!] Local AGENTS.md: old inline RTK block");
         } else {
             println!("[--] Local AGENTS.md: exists but rtk not configured");
@@ -2100,7 +2356,7 @@ fn show_codex_config() -> Result<()> {
 
     println!("\nUsage:");
     println!("  rtk init --codex              # Configure local AGENTS.md + RTK.md");
-    println!("  rtk init -g --codex           # Configure ~/.codex/AGENTS.md + ~/.codex/RTK.md");
+    println!("  rtk init -g --codex           # Configure $CODEX_HOME/AGENTS.md + $CODEX_HOME/RTK.md (or ~/.codex/)");
     println!("  rtk init -g --codex --uninstall  # Remove global Codex RTK artifacts");
 
     Ok(())
@@ -2123,7 +2379,7 @@ exec rtk hook gemini
 "#;
 
 fn resolve_gemini_dir() -> Result<PathBuf> {
-    resolve_home_subdir(".gemini")
+    resolve_home_subdir(GEMINI_DIR)
 }
 
 /// Entry point for `rtk init --gemini`
@@ -2153,6 +2409,10 @@ pub fn run_gemini(global: bool, hook_only: bool, patch_mode: PatchMode, verbose:
         fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755))
             .with_context(|| format!("Failed to set hook permissions: {}", hook_path.display()))?;
     }
+
+    // Store integrity baseline for tamper detection
+    integrity::store_hash(&hook_path)
+        .with_context(|| format!("Failed to store integrity hash for {}", hook_path.display()))?;
 
     // 2. Install GEMINI.md (RTK awareness for Gemini)
     if !hook_only {
@@ -2362,8 +2622,7 @@ kubectl get pods           rtk kubectl pods
 ## Meta commands (use directly)
 
 ```bash
-rtk --help            # List available commands
-rtk proxy <cmd>       # Run raw (no filtering) but track usage
+rtk proxy <cmd>       # Run raw (no filtering)
 ```
 "#;
 
@@ -2437,36 +2696,23 @@ mod tests {
     #[test]
     fn test_init_has_version_marker() {
         assert!(
-            RTK_INSTRUCTIONS.contains("<!-- rtk-instructions"),
-            "RTK_INSTRUCTIONS must have version marker for idempotency"
+            RTK_INSTRUCTIONS.contains(RTK_BLOCK_START),
+            "RTK_INSTRUCTIONS must start with RTK_BLOCK_START marker"
         );
-    }
-
-    #[test]
-    fn test_hook_has_guards() {
-        assert!(REWRITE_HOOK.contains("command -v rtk"));
-        assert!(REWRITE_HOOK.contains("command -v jq"));
-        // Guards (rtk/jq availability checks) must appear before the actual delegation call.
-        // The thin delegating hook no longer uses set -euo pipefail.
-        let jq_pos = REWRITE_HOOK.find("command -v jq").unwrap();
-        let rtk_delegate_pos = REWRITE_HOOK.find("rtk rewrite \"$CMD\"").unwrap();
         assert!(
-            jq_pos < rtk_delegate_pos,
-            "Guards must appear before rtk rewrite delegation"
+            RTK_INSTRUCTIONS.contains(RTK_BLOCK_END),
+            "RTK_INSTRUCTIONS must end with RTK_BLOCK_END marker"
         );
     }
 
     #[test]
     fn test_migration_removes_old_block() {
-        let input = r#"# My Config
+        let input = format!(
+            "# My Config\n\n{} v2 -->\nOLD RTK STUFF\n{}\n\nMore content",
+            RTK_BLOCK_START, RTK_BLOCK_END
+        );
 
-<!-- rtk-instructions v2 -->
-OLD RTK STUFF
-<!-- /rtk-instructions -->
-
-More content"#;
-
-        let (result, migrated) = remove_rtk_block(input);
+        let (result, migrated) = remove_rtk_block(&input);
         assert!(migrated);
         assert!(!result.contains("OLD RTK STUFF"));
         assert!(result.contains("# My Config"));
@@ -2509,38 +2755,30 @@ More content"#;
 
     #[test]
     fn test_migration_warns_on_missing_end_marker() {
-        let input = "<!-- rtk-instructions v2 -->\nOLD STUFF\nNo end marker";
-        let (result, migrated) = remove_rtk_block(input);
+        let input = format!("{} v2 -->\nOLD STUFF\nNo end marker", RTK_BLOCK_START);
+        let (result, migrated) = remove_rtk_block(&input);
         assert!(!migrated);
         assert_eq!(result, input);
     }
 
     #[test]
-    #[cfg(unix)]
-    fn test_default_mode_creates_hook_and_rtk_md() {
+    fn test_default_mode_creates_rtk_md() {
         let temp = TempDir::new().unwrap();
-        let hook_path = temp.path().join("rtk-rewrite.sh");
         let rtk_md_path = temp.path().join("RTK.md");
 
-        fs::write(&hook_path, REWRITE_HOOK).unwrap();
         fs::write(&rtk_md_path, RTK_SLIM).unwrap();
-
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).unwrap();
-
-        assert!(hook_path.exists());
         assert!(rtk_md_path.exists());
 
-        let metadata = fs::metadata(&hook_path).unwrap();
-        assert!(metadata.permissions().mode() & 0o111 != 0);
+        let content = fs::read_to_string(&rtk_md_path).unwrap();
+        assert_eq!(content, RTK_SLIM);
     }
 
     #[test]
     fn test_claude_md_mode_creates_full_injection() {
         // Just verify RTK_INSTRUCTIONS constant has the right content
-        assert!(RTK_INSTRUCTIONS.contains("<!-- rtk-instructions"));
+        assert!(RTK_INSTRUCTIONS.contains(RTK_BLOCK_START));
         assert!(RTK_INSTRUCTIONS.contains("rtk cargo test"));
-        assert!(RTK_INSTRUCTIONS.contains("<!-- /rtk-instructions -->"));
+        assert!(RTK_INSTRUCTIONS.contains(RTK_BLOCK_END));
         assert!(RTK_INSTRUCTIONS.len() > 4000);
     }
 
@@ -2552,21 +2790,17 @@ More content"#;
         let (content, action) = upsert_rtk_block(input, RTK_INSTRUCTIONS);
         assert_eq!(action, RtkBlockUpsert::Added);
         assert!(content.contains("# Team instructions"));
-        assert!(content.contains("<!-- rtk-instructions"));
+        assert!(content.contains(RTK_BLOCK_START));
     }
 
     #[test]
     fn test_upsert_rtk_block_updates_stale_block() {
-        let input = r#"# Team instructions
+        let input = format!(
+            "# Team instructions\n\n{} v1 -->\nOLD RTK CONTENT\n{}\n\nMore notes\n",
+            RTK_BLOCK_START, RTK_BLOCK_END
+        );
 
-<!-- rtk-instructions v1 -->
-OLD RTK CONTENT
-<!-- /rtk-instructions -->
-
-More notes
-"#;
-
-        let (content, action) = upsert_rtk_block(input, RTK_INSTRUCTIONS);
+        let (content, action) = upsert_rtk_block(&input, RTK_INSTRUCTIONS);
         assert_eq!(action, RtkBlockUpsert::Updated);
         assert!(!content.contains("OLD RTK CONTENT"));
         assert!(content.contains("rtk cargo test")); // from current RTK_INSTRUCTIONS
@@ -2587,8 +2821,8 @@ More notes
 
     #[test]
     fn test_upsert_rtk_block_detects_malformed_block() {
-        let input = "<!-- rtk-instructions v2 -->\npartial";
-        let (content, action) = upsert_rtk_block(input, RTK_INSTRUCTIONS);
+        let input = format!("{} v2 -->\npartial", RTK_BLOCK_START);
+        let (content, action) = upsert_rtk_block(&input, RTK_INSTRUCTIONS);
         assert_eq!(action, RtkBlockUpsert::Malformed);
         assert_eq!(content, input);
     }
@@ -2666,6 +2900,56 @@ More notes
     }
 
     #[test]
+    fn test_kilocode_mode_creates_rules_file() {
+        let temp = TempDir::new().unwrap();
+        run_kilocode_mode_at(temp.path(), 0).unwrap();
+
+        let rules_path = temp.path().join(".kilocode/rules/rtk-rules.md");
+        assert!(rules_path.exists(), "Rules file should be created");
+        let content = fs::read_to_string(&rules_path).unwrap();
+        assert!(content.contains("RTK"), "Rules file should contain RTK");
+    }
+
+    #[test]
+    fn test_kilocode_mode_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        run_kilocode_mode_at(temp.path(), 0).unwrap();
+
+        let path = temp.path().join(".kilocode/rules/rtk-rules.md");
+        let first = fs::read_to_string(&path).unwrap();
+
+        // Second run should not overwrite
+        run_kilocode_mode_at(temp.path(), 0).unwrap();
+        let second = fs::read_to_string(&path).unwrap();
+        assert_eq!(first, second, "Idempotent: content should not change");
+    }
+
+    #[test]
+    fn test_antigravity_mode_creates_rules_file() {
+        let temp = TempDir::new().unwrap();
+        run_antigravity_mode_at(temp.path(), 0).unwrap();
+
+        let rules_path = temp.path().join(".agents/rules/antigravity-rtk-rules.md");
+        assert!(rules_path.exists(), "Rules file should be created");
+        let content = fs::read_to_string(&rules_path).unwrap();
+        assert!(content.contains("RTK"), "Rules file should contain RTK");
+    }
+
+    #[test]
+    fn test_antigravity_mode_is_idempotent() {
+        let temp = TempDir::new().unwrap();
+        run_antigravity_mode_at(temp.path(), 0).unwrap();
+
+        let path = temp.path().join(".agents/rules/antigravity-rtk-rules.md");
+        let first = fs::read_to_string(&path).unwrap();
+
+        // Second run should not overwrite
+        run_antigravity_mode_at(temp.path(), 0).unwrap();
+        let second = fs::read_to_string(&path).unwrap();
+        assert_eq!(first, second, "Idempotent: content should not change");
+    }
+
+    #[test]
     fn test_patch_agents_md_creates_missing_file() {
         let temp = TempDir::new().unwrap();
         let agents_md = temp.path().join("AGENTS.md");
@@ -2683,7 +2967,10 @@ More notes
         let agents_md = temp.path().join("AGENTS.md");
         fs::write(
             &agents_md,
-            "# Team rules\n\n<!-- rtk-instructions v2 -->\nold\n<!-- /rtk-instructions -->\n",
+            format!(
+                "# Team rules\n\n{} v2 -->\nold\n{}\n",
+                RTK_BLOCK_START, RTK_BLOCK_END
+            ),
         )
         .unwrap();
 
@@ -2693,6 +2980,38 @@ More notes
         let content = fs::read_to_string(&agents_md).unwrap();
         assert!(!content.contains("old"));
         assert_eq!(content.matches("@RTK.md").count(), 1);
+    }
+
+    #[test]
+    fn test_run_codex_mode_global_writes_absolute_reference_to_codex_dir() {
+        let temp = TempDir::new().unwrap();
+        let agents_md = temp.path().join("AGENTS.md");
+        let rtk_md = temp.path().join("RTK.md");
+
+        run_codex_mode_with_paths(agents_md.clone(), rtk_md.clone(), true, 0).unwrap();
+
+        assert!(rtk_md.exists());
+        assert_eq!(fs::read_to_string(&rtk_md).unwrap(), RTK_SLIM_CODEX);
+        assert_eq!(
+            fs::read_to_string(&agents_md).unwrap(),
+            format!("{}\n", codex_rtk_md_ref(temp.path()))
+        );
+    }
+
+    #[test]
+    fn test_resolve_codex_dir_prefers_codex_home_and_ignores_empty_value() {
+        let codex_home = PathBuf::from("/tmp/custom-codex-home");
+        let home_dir = PathBuf::from("/tmp/home");
+
+        let preferred =
+            resolve_codex_dir_from(Some(codex_home.clone()), Some(home_dir.clone())).unwrap();
+        let empty_falls_back =
+            resolve_codex_dir_from(Some(PathBuf::new()), Some(home_dir.clone())).unwrap();
+        let missing_falls_back = resolve_codex_dir_from(None, Some(home_dir.clone())).unwrap();
+
+        assert_eq!(preferred, codex_home);
+        assert_eq!(empty_falls_back, home_dir.join(".codex"));
+        assert_eq!(missing_falls_back, home_dir.join(".codex"));
     }
 
     #[test]
@@ -2718,6 +3037,51 @@ More notes
     }
 
     #[test]
+    fn test_uninstall_codex_at_removes_absolute_reference() {
+        let temp = TempDir::new().unwrap();
+        let codex_dir = temp.path();
+        let agents_md = codex_dir.join("AGENTS.md");
+        let rtk_md = codex_dir.join("RTK.md");
+        let absolute_ref = codex_rtk_md_ref(codex_dir);
+
+        fs::write(&agents_md, format!("# Team rules\n\n{}\n", absolute_ref)).unwrap();
+        fs::write(&rtk_md, "codex config").unwrap();
+
+        let removed = uninstall_codex_at(codex_dir, 0).unwrap();
+
+        assert_eq!(removed.len(), 2);
+        let content = fs::read_to_string(&agents_md).unwrap();
+        assert!(!content.contains(&absolute_ref));
+        assert!(content.contains("# Team rules"));
+    }
+
+    #[test]
+    fn test_uninstall_codex_at_removes_rtk_instructions_block() {
+        let temp = TempDir::new().unwrap();
+        let codex_dir = temp.path();
+        let agents_md = codex_dir.join("AGENTS.md");
+        let rtk_md = codex_dir.join("RTK.md");
+
+        fs::write(
+            &agents_md,
+            format!(
+                "# Team rules\n\n{} v2 -->\nOLD RTK STUFF\n{}\n\nMore content",
+                RTK_BLOCK_START, RTK_BLOCK_END
+            ),
+        )
+        .unwrap();
+        fs::write(&rtk_md, "codex config").unwrap();
+
+        let removed = uninstall_codex_at(codex_dir, 0).unwrap();
+
+        let content = fs::read_to_string(&agents_md).unwrap();
+        assert!(!content.contains("OLD RTK STUFF"));
+        assert!(content.contains("# Team rules"));
+        assert!(content.contains("More content"));
+        assert!(removed.iter().any(|r| r.contains("rtk-instructions block")));
+    }
+
+    #[test]
     fn test_local_init_unchanged() {
         // Local init should use claude-md mode
         let temp = TempDir::new().unwrap();
@@ -2726,7 +3090,7 @@ More notes
         fs::write(&claude_md, RTK_INSTRUCTIONS).unwrap();
         let content = fs::read_to_string(&claude_md).unwrap();
 
-        assert!(content.contains("<!-- rtk-instructions"));
+        assert!(content.contains(RTK_BLOCK_START));
     }
 
     // Tests for hook_already_present()
@@ -2775,6 +3139,23 @@ More notes
     }
 
     #[test]
+    fn test_hook_already_present_new_command() {
+        let json_content = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": CLAUDE_HOOK_COMMAND
+                    }]
+                }]
+            }
+        });
+
+        assert!(hook_already_present(&json_content, CLAUDE_HOOK_COMMAND));
+    }
+
+    #[test]
     fn test_hook_not_present_other_hooks() {
         let json_content = serde_json::json!({
             "hooks": {
@@ -2798,7 +3179,7 @@ More notes
         let mut json_content = serde_json::json!({});
         let hook_command = "/Users/test/.claude/hooks/rtk-rewrite.sh";
 
-        insert_hook_entry(&mut json_content, hook_command);
+        insert_hook_entry(&mut json_content, hook_command).unwrap();
 
         // Should create full structure
         assert!(json_content.get("hooks").is_some());
@@ -2830,7 +3211,7 @@ More notes
         });
 
         let hook_command = "/Users/test/.claude/hooks/rtk-rewrite.sh";
-        insert_hook_entry(&mut json_content, hook_command);
+        insert_hook_entry(&mut json_content, hook_command).unwrap();
 
         let pre_tool_use = json_content["hooks"]["PreToolUse"].as_array().unwrap();
         assert_eq!(pre_tool_use.len(), 2); // Should have both hooks
@@ -2853,7 +3234,7 @@ More notes
         });
 
         let hook_command = "/Users/test/.claude/hooks/rtk-rewrite.sh";
-        insert_hook_entry(&mut json_content, hook_command);
+        insert_hook_entry(&mut json_content, hook_command).unwrap();
 
         // Should preserve all other keys
         assert_eq!(json_content["env"]["PATH"], "/custom/path");
@@ -2952,6 +3333,40 @@ More notes
     }
 
     #[test]
+    fn test_remove_hook_from_json_new_command() {
+        let mut json_content = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/some/other/hook.sh"
+                        }]
+                    },
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": CLAUDE_HOOK_COMMAND
+                        }]
+                    }
+                ]
+            }
+        });
+
+        let removed = remove_hook_from_json(&mut json_content);
+        assert!(removed);
+
+        let pre_tool_use = json_content["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(pre_tool_use.len(), 1);
+        assert_eq!(
+            pre_tool_use[0]["hooks"][0]["command"].as_str().unwrap(),
+            "/some/other/hook.sh"
+        );
+    }
+
+    #[test]
     fn test_remove_hook_when_not_present() {
         let mut json_content = serde_json::json!({
             "hooks": {
@@ -2972,12 +3387,26 @@ More notes
     // ─── Cursor hooks.json tests ───
 
     #[test]
-    fn test_cursor_hook_already_present_true() {
+    fn test_cursor_hook_already_present_legacy_script() {
         let json_content = serde_json::json!({
             "version": 1,
             "hooks": {
                 "preToolUse": [{
                     "command": "./hooks/rtk-rewrite.sh",
+                    "matcher": "Shell"
+                }]
+            }
+        });
+        assert!(cursor_hook_already_present(&json_content));
+    }
+
+    #[test]
+    fn test_cursor_hook_already_present_new_command() {
+        let json_content = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "preToolUse": [{
+                    "command": CURSOR_HOOK_COMMAND,
                     "matcher": "Shell"
                 }]
             }
@@ -3008,11 +3437,11 @@ More notes
     #[test]
     fn test_insert_cursor_hook_entry_empty() {
         let mut json_content = serde_json::json!({ "version": 1 });
-        insert_cursor_hook_entry(&mut json_content);
+        insert_cursor_hook_entry(&mut json_content).unwrap();
 
         let hooks = json_content["hooks"]["preToolUse"].as_array().unwrap();
         assert_eq!(hooks.len(), 1);
-        assert_eq!(hooks[0]["command"], "./hooks/rtk-rewrite.sh");
+        assert_eq!(hooks[0]["command"], CURSOR_HOOK_COMMAND);
         assert_eq!(hooks[0]["matcher"], "Shell");
         assert_eq!(json_content["version"], 1);
     }
@@ -3032,12 +3461,12 @@ More notes
             }
         });
 
-        insert_cursor_hook_entry(&mut json_content);
+        insert_cursor_hook_entry(&mut json_content).unwrap();
 
         let pre_tool_use = json_content["hooks"]["preToolUse"].as_array().unwrap();
         assert_eq!(pre_tool_use.len(), 2);
         assert_eq!(pre_tool_use[0]["command"], "./hooks/other.sh");
-        assert_eq!(pre_tool_use[1]["command"], "./hooks/rtk-rewrite.sh");
+        assert_eq!(pre_tool_use[1]["command"], CURSOR_HOOK_COMMAND);
 
         // afterFileEdit should be preserved
         assert!(json_content["hooks"]["afterFileEdit"].is_array());
@@ -3051,6 +3480,26 @@ More notes
                 "preToolUse": [
                     { "command": "./hooks/other.sh", "matcher": "Shell" },
                     { "command": "./hooks/rtk-rewrite.sh", "matcher": "Shell" }
+                ]
+            }
+        });
+
+        let removed = remove_cursor_hook_from_json(&mut json_content);
+        assert!(removed);
+
+        let hooks = json_content["hooks"]["preToolUse"].as_array().unwrap();
+        assert_eq!(hooks.len(), 1);
+        assert_eq!(hooks[0]["command"], "./hooks/other.sh");
+    }
+
+    #[test]
+    fn test_remove_cursor_hook_from_json_new_command() {
+        let mut json_content = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "preToolUse": [
+                    { "command": "./hooks/other.sh", "matcher": "Shell" },
+                    { "command": CURSOR_HOOK_COMMAND, "matcher": "Shell" }
                 ]
             }
         });
@@ -3078,22 +3527,363 @@ More notes
         assert!(!removed);
     }
 
+    // ─── Legacy migration tests ──────────────────────────────────────
+
     #[test]
-    fn test_cursor_hook_script_has_guards() {
-        assert!(CURSOR_REWRITE_HOOK.contains("command -v rtk"));
-        assert!(CURSOR_REWRITE_HOOK.contains("command -v jq"));
-        let jq_pos = CURSOR_REWRITE_HOOK.find("command -v jq").unwrap();
-        let rtk_delegate_pos = CURSOR_REWRITE_HOOK.find("rtk rewrite \"$CMD\"").unwrap();
+    fn test_remove_legacy_hook_entries_strips_old_script() {
+        let mut root = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": "/home/user/.claude/hooks/rtk-rewrite.sh"
+                    }]
+                }]
+            }
+        });
+
+        assert!(remove_legacy_hook_entries_from_json(&mut root));
+        let arr = root["hooks"]["PreToolUse"].as_array().unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn test_remove_legacy_hook_entries_preserves_new_command() {
+        let mut root = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/home/user/.claude/hooks/rtk-rewrite.sh"
+                        }]
+                    },
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": CLAUDE_HOOK_COMMAND
+                        }]
+                    }
+                ]
+            }
+        });
+
+        assert!(remove_legacy_hook_entries_from_json(&mut root));
+        let arr = root["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+        assert_eq!(cmd, CLAUDE_HOOK_COMMAND);
+    }
+
+    #[test]
+    fn test_remove_legacy_hook_entries_noop_when_no_legacy() {
+        let mut root = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [{
+                    "matcher": "Bash",
+                    "hooks": [{
+                        "type": "command",
+                        "command": CLAUDE_HOOK_COMMAND
+                    }]
+                }]
+            }
+        });
+
+        assert!(!remove_legacy_hook_entries_from_json(&mut root));
+        let arr = root["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+    }
+
+    #[test]
+    fn test_remove_legacy_hook_entries_preserves_third_party_hooks() {
+        let mut root = serde_json::json!({
+            "hooks": {
+                "PreToolUse": [
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "/home/user/.claude/hooks/rtk-rewrite.sh"
+                        }]
+                    },
+                    {
+                        "matcher": "Bash",
+                        "hooks": [{
+                            "type": "command",
+                            "command": "some-other-tool --hook"
+                        }]
+                    }
+                ]
+            }
+        });
+
+        assert!(remove_legacy_hook_entries_from_json(&mut root));
+        let arr = root["hooks"]["PreToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+        assert_eq!(cmd, "some-other-tool --hook");
+    }
+
+    #[test]
+    fn test_remove_legacy_cursor_entries_strips_old_script() {
+        let mut root = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "preToolUse": [{
+                    "command": "./hooks/rtk-rewrite.sh",
+                    "matcher": "Shell"
+                }]
+            }
+        });
+
+        assert!(remove_legacy_cursor_hook_entries_from_json(&mut root));
+        let arr = root["hooks"]["preToolUse"].as_array().unwrap();
+        assert!(arr.is_empty());
+    }
+
+    #[test]
+    fn test_remove_legacy_cursor_entries_preserves_new_command() {
+        let mut root = serde_json::json!({
+            "version": 1,
+            "hooks": {
+                "preToolUse": [
+                    {
+                        "command": "./hooks/rtk-rewrite.sh",
+                        "matcher": "Shell"
+                    },
+                    {
+                        "command": CURSOR_HOOK_COMMAND,
+                        "matcher": "Shell"
+                    }
+                ]
+            }
+        });
+
+        assert!(remove_legacy_cursor_hook_entries_from_json(&mut root));
+        let arr = root["hooks"]["preToolUse"].as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["command"].as_str().unwrap(), CURSOR_HOOK_COMMAND);
+    }
+
+    use std::sync::Mutex;
+    static CLAUDE_DIR_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_claude_dir_override<F: FnOnce(&Path)>(tmp: &TempDir, f: F) {
+        let _guard = CLAUDE_DIR_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let claude_dir = tmp.path().join(CLAUDE_DIR);
+        fs::create_dir_all(&claude_dir).unwrap();
+
+        let orig = std::env::var_os("RTK_CLAUDE_DIR");
+        std::env::set_var("RTK_CLAUDE_DIR", &claude_dir);
+        f(&claude_dir);
+        match orig {
+            Some(v) => std::env::set_var("RTK_CLAUDE_DIR", v),
+            None => std::env::remove_var("RTK_CLAUDE_DIR"),
+        }
+    }
+
+    #[test]
+    fn test_global_default_mode_creates_artifacts() {
+        let tmp = TempDir::new().unwrap();
+        with_claude_dir_override(&tmp, |claude_dir| {
+            run_default_mode(true, PatchMode::Auto, 0, false).unwrap();
+
+            assert!(claude_dir.join(RTK_MD).exists(), "RTK.md must be created");
+            assert!(
+                claude_dir.join(CLAUDE_MD).exists(),
+                "CLAUDE.md must be created"
+            );
+
+            let settings = claude_dir.join(SETTINGS_JSON);
+            assert!(settings.exists(), "settings.json must be created");
+            let content = fs::read_to_string(&settings).unwrap();
+            assert!(
+                content.contains(CLAUDE_HOOK_COMMAND),
+                "settings.json must contain hook command"
+            );
+        });
+    }
+
+    #[test]
+    fn test_global_uninstall_removes_artifacts() {
+        let tmp = TempDir::new().unwrap();
+        with_claude_dir_override(&tmp, |claude_dir| {
+            run_default_mode(true, PatchMode::Auto, 0, false).unwrap();
+            uninstall(true, false, false, false, 0).unwrap();
+
+            assert!(!claude_dir.join(RTK_MD).exists(), "RTK.md must be removed");
+            let settings_content =
+                fs::read_to_string(claude_dir.join(SETTINGS_JSON)).unwrap_or_default();
+            assert!(
+                !settings_content.contains(CLAUDE_HOOK_COMMAND),
+                "hook entry must be removed from settings.json"
+            );
+        });
+    }
+
+    #[test]
+    fn test_global_default_mode_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        with_claude_dir_override(&tmp, |claude_dir| {
+            run_default_mode(true, PatchMode::Auto, 0, false).unwrap();
+            run_default_mode(true, PatchMode::Auto, 0, false).unwrap();
+
+            let settings = fs::read_to_string(claude_dir.join(SETTINGS_JSON)).unwrap();
+            let count = settings.matches(CLAUDE_HOOK_COMMAND).count();
+            assert_eq!(count, 1, "hook command must appear exactly once");
+        });
+    }
+
+    #[test]
+    fn test_upgrade_from_claude_md_to_hook_mode() {
+        let tmp = TempDir::new().unwrap();
+        with_claude_dir_override(&tmp, |claude_dir| {
+            run_claude_md_mode(true, 0, false).unwrap();
+            let claude_md_content = fs::read_to_string(claude_dir.join(CLAUDE_MD)).unwrap();
+            assert!(
+                claude_md_content.contains(RTK_BLOCK_START),
+                "pre-condition: old block must exist"
+            );
+
+            run_default_mode(true, PatchMode::Auto, 0, false).unwrap();
+
+            assert!(claude_dir.join(RTK_MD).exists(), "RTK.md must be created");
+            let settings = fs::read_to_string(claude_dir.join(SETTINGS_JSON)).unwrap();
+            assert!(
+                settings.contains(CLAUDE_HOOK_COMMAND),
+                "hook must be in settings.json after upgrade"
+            );
+        });
+    }
+
+    #[test]
+    fn test_local_init_no_hook() {
+        let tmp = TempDir::new().unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        std::env::set_current_dir(tmp.path()).unwrap();
+
+        let result = run_default_mode(false, PatchMode::Auto, 0, false);
+        std::env::set_current_dir(&cwd).unwrap();
+
+        result.unwrap();
         assert!(
-            jq_pos < rtk_delegate_pos,
-            "Guards must appear before rtk rewrite delegation"
+            tmp.path().join(CLAUDE_MD).exists(),
+            "local CLAUDE.md must be created"
+        );
+        assert!(
+            !tmp.path().join(SETTINGS_JSON).exists(),
+            "settings.json must not be created for local init"
         );
     }
 
     #[test]
-    fn test_cursor_hook_outputs_cursor_format() {
-        assert!(CURSOR_REWRITE_HOOK.contains("\"permission\": \"allow\""));
-        assert!(CURSOR_REWRITE_HOOK.contains("\"updated_input\""));
-        assert!(!CURSOR_REWRITE_HOOK.contains("hookSpecificOutput"));
+    fn test_global_hook_only_mode_creates_settings() {
+        let tmp = TempDir::new().unwrap();
+        with_claude_dir_override(&tmp, |claude_dir| {
+            run_hook_only_mode(true, PatchMode::Auto, 0, false).unwrap();
+
+            assert!(
+                !claude_dir.join(RTK_MD).exists(),
+                "RTK.md must NOT be created in hook-only mode"
+            );
+            let settings = fs::read_to_string(claude_dir.join(SETTINGS_JSON)).unwrap();
+            assert!(
+                settings.contains(CLAUDE_HOOK_COMMAND),
+                "settings.json must contain hook command"
+            );
+        });
+    }
+
+    #[test]
+    fn test_uninstall_removes_rtk_instructions_block() {
+        let temp = TempDir::new().unwrap();
+        let claude_md = temp.path().join("CLAUDE.md");
+
+        fs::write(&claude_md, RTK_INSTRUCTIONS).unwrap();
+        assert!(claude_md.exists());
+
+        let content = fs::read_to_string(&claude_md).unwrap();
+        assert!(content.contains(RTK_BLOCK_START));
+
+        let (cleaned, did_remove) = remove_rtk_block(&content);
+        assert!(did_remove);
+        assert!(!cleaned.contains(RTK_BLOCK_START));
+        assert!(!cleaned.contains("rtk cargo test"));
+    }
+
+    #[test]
+    fn test_uninstall_preserves_non_rtk_content() {
+        let content = format!(
+            "# My Project\n\nSome custom instructions.\n\n{}\n\n## Other Notes\n\nKeep this.",
+            RTK_INSTRUCTIONS
+        );
+
+        let (cleaned, did_remove) = remove_rtk_block(&content);
+
+        assert!(did_remove);
+        assert!(cleaned.contains("# My Project"));
+        assert!(cleaned.contains("Some custom instructions."));
+        assert!(cleaned.contains("## Other Notes"));
+        assert!(cleaned.contains("Keep this."));
+        assert!(!cleaned.contains(RTK_BLOCK_START));
+    }
+
+    #[test]
+    fn test_uninstall_handles_both_artifacts() {
+        let content = format!("# Config\n\n@RTK.md\n\n{}\n\nMore stuff", RTK_INSTRUCTIONS);
+
+        let after_at_removal: String = content
+            .lines()
+            .filter(|line| !line.trim().starts_with("@RTK.md"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(!after_at_removal.contains("@RTK.md"));
+        assert!(after_at_removal.contains(RTK_BLOCK_START));
+
+        let (final_content, did_remove) = remove_rtk_block(&after_at_removal);
+        assert!(did_remove);
+        assert!(!final_content.contains(RTK_BLOCK_START));
+        assert!(final_content.contains("# Config"));
+        assert!(final_content.contains("More stuff"));
+    }
+
+    #[test]
+    fn test_uninstall_integration_claude_md_only() {
+        let (cleaned, did_remove) = remove_rtk_block(RTK_INSTRUCTIONS);
+        assert!(did_remove, "remove_rtk_block must succeed for valid block");
+        assert!(
+            cleaned.trim().is_empty(),
+            "CLAUDE.md with only RTK content should be empty after removal"
+        );
+    }
+
+    #[test]
+    fn test_uninstall_integration_preserves_user_content() {
+        let user_content = "# My Project Rules\n\nAlways use snake_case.";
+        let installed = format!("{}\n\n{}", user_content, RTK_INSTRUCTIONS);
+
+        let (cleaned, did_remove) = remove_rtk_block(&installed);
+        assert!(did_remove);
+        assert!(!cleaned.trim().is_empty(), "user content should remain");
+        assert!(
+            cleaned.contains("My Project Rules"),
+            "user content must be preserved"
+        );
+        assert!(
+            cleaned.contains("snake_case"),
+            "user content must be preserved"
+        );
+        assert!(
+            !cleaned.contains(RTK_BLOCK_START),
+            "RTK block must be fully removed"
+        );
+        assert!(
+            !cleaned.contains(RTK_BLOCK_END),
+            "RTK end marker must be removed"
+        );
     }
 }

@@ -9,4 +9,4 @@ Includes:
 - tee output recovery
 - display helpers
 
-Telemetry and analytics tracking are removed in this fork.
+Telemetry/call-home behavior is removed in this fork. Local tracking powers `rtk gain` only.

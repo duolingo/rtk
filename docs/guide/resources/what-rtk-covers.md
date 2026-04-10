@@ -154,4 +154,4 @@ If a command isn't in the list above, RTK runs it through passthrough — the ou
 rtk proxy make install    # runs make install, tracks usage, no filtering
 ```
 
-To check which commands were missed opportunities: `rtk discover`.
+

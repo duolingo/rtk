@@ -21,9 +21,6 @@ rtk gh pr list
 ## Meta Commands
 
 ```bash
-rtk gain              # Show token savings
-rtk gain --history    # Command history with savings
-rtk discover          # Find missed RTK opportunities
 rtk proxy <cmd>       # Run raw (no filtering, for debugging)
 ```
 

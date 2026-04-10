@@ -14,4 +14,4 @@ Report vulnerabilities via GitHub Security Advisories for this repository.
 ## Non-goals in this fork
 
 - no outbound telemetry
-- no local analytics/tracking database
+- no outbound analytics upload; local stats stay local

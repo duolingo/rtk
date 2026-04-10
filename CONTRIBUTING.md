@@ -251,11 +251,25 @@ For how to write tests (fixtures, snapshots, token savings verification), see [d
 
 ### Pre-Commit Gate (mandatory)
 
-All three must pass before any PR:
+This repo uses **prek** with a strict local gate.
+
+Install and enable hooks:
 
 ```bash
-cargo fmt --all --check && cargo clippy --all-targets && cargo test
+cargo install prek
+prek install --hook-type pre-commit --hook-type pre-push
 ```
+
+Run all configured checks:
+
+```bash
+prek run --all-files
+```
+
+The gate enforces:
+- formatting/lint/tests (`cargo fmt`, `cargo check`, `cargo clippy`, `cargo test`)
+- security scan at pre-push (`cargo audit`)
+- architecture guards (hotspot file-size caps, dangerous pattern checks, command-module test presence, new-command wiring checks)
 
 ### PR Testing Checklist
 

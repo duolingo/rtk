@@ -1,12 +1,12 @@
 [package]
 name = "rtk"
-version = "0.35.0"
+version = "0.39.0"
 edition = "2021"
 authors = ["Patrick Szymkowiak"]
 description = "Rust Token Killer - High-performance CLI proxy to minimize LLM token consumption"
 license = "MIT"
-homepage = "https://github.com/duolingo/rtk"
-repository = "https://github.com/duolingo/rtk"
+homepage = "https://www.rtk-ai.app"
+repository = "https://github.com/rtk-ai/rtk"
 readme = "README.md"
 keywords = ["cli", "llm", "token", "filter", "productivity"]
 categories = ["command-line-utilities", "development-tools"]
@@ -22,6 +22,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 colored = "2"
 dirs = "5"
+rusqlite = { version = "0.31", features = ["bundled"] }
 toml = "0.8"
 chrono = "0.4"
 tempfile = "3"
@@ -57,7 +58,6 @@ priority = "optional"
 assets = [
     ["target/release/rtk", "usr/bin/", "755"],
 ]
-
 # cargo-generate-rpm configuration
 [package.metadata.generate-rpm]
 assets = [

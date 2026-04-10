@@ -8,7 +8,7 @@ This fork keeps output filtering and hook integrations, and removes:
 
 - OpenClaw integration
 - outbound telemetry
-- local analytics/tracking commands (`gain`, `discover`, `session`, `cc-economics`)
+- outbound telemetry/call-home behavior; local `rtk gain` stats remain local-only
 
 ## Install
 
@@ -46,7 +46,7 @@ rtk grep "error" .
 
 ## Privacy
 
-`rtk` in this fork does not send telemetry.
+`rtk` in this fork does not send telemetry. Local `rtk gain` stats are stored only on disk and are never uploaded by RTK.
 
 ## Documentation
 

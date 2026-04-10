@@ -13,7 +13,7 @@ pub enum Classification {
         rtk_equivalent: &'static str,
         category: &'static str,
         estimated_savings_pct: f64,
-        status: super::report::RtkStatus,
+        status: super::status::RtkStatus,
     },
     Unsupported {
         base_command: String,
@@ -160,7 +160,7 @@ pub fn classify_command(cmd: &str) -> Classification {
                     .iter()
                     .find(|(s, _)| *s == subcmd)
                     .map(|(_, st)| *st)
-                    .unwrap_or(super::report::RtkStatus::Existing);
+                    .unwrap_or(super::status::RtkStatus::Existing);
 
                 // Check if this subcommand has custom savings
                 let savings = rule
@@ -172,10 +172,10 @@ pub fn classify_command(cmd: &str) -> Classification {
 
                 (savings, status)
             } else {
-                (rule.savings_pct, super::report::RtkStatus::Existing)
+                (rule.savings_pct, super::status::RtkStatus::Existing)
             }
         } else {
-            (rule.savings_pct, super::report::RtkStatus::Existing)
+            (rule.savings_pct, super::status::RtkStatus::Existing)
         };
 
         Classification::Supported {
@@ -780,7 +780,7 @@ fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::report::RtkStatus;
+    use super::super::status::RtkStatus;
     use super::*;
 
     #[test]

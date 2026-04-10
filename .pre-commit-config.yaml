@@ -1,0 +1,88 @@
+minimum_prek_version: "0.3.8"
+fail_fast: true
+default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
+
+repos:
+  - repo: meta
+    hooks:
+      - id: check-hooks-apply
+      - id: check-useless-excludes
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-symlinks
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=256"]
+
+  - repo: local
+    hooks:
+      - id: architecture-size-guard
+        name: architecture-size-guard
+        entry: bash scripts/prek/check-architecture-size.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: dangerous-patterns
+        name: dangerous-patterns-in-added-rust-lines
+        entry: bash scripts/prek/check-dangerous-patterns.sh
+        language: system
+        files: "\\.rs$"
+
+      - id: cmd-module-has-tests
+        name: cmd-module-has-tests
+        entry: bash scripts/prek/check-cmd-tests.sh
+        language: system
+        files: "^src/cmds/.+_cmd\\.rs$"
+
+      - id: new-command-wiring
+        name: new-command-wiring-guard
+        entry: bash scripts/prek/check-new-command-wiring.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: rust-fmt
+        name: rustfmt-all-check
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: rust-check
+        name: cargo-check-all-targets
+        entry: cargo check --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: rust-clippy
+        name: cargo-clippy-all-targets
+        entry: cargo clippy --all-targets
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: rust-tests
+        name: cargo-test-all
+        entry: cargo test --all
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: cargo-audit
+        name: cargo-audit-security
+        entry: bash scripts/prek/run-cargo-audit.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -17,19 +17,14 @@ grep -r "pattern" src/     rtk grep -r "pattern" src/
 
 **rtk meta-commands** (always use these directly, no prefix needed):
 ```bash
-rtk gain              # Show token savings analytics
-rtk gain --history    # Full command history with per-command savings
-rtk discover          # Scan session history for missed rtk opportunities
 rtk proxy <cmd>       # Run a command raw (no filtering) but still track it
 ```
 
 **Verify rtk is installed before starting:**
 ```bash
 rtk --version   # Should print: rtk X.Y.Z
-rtk gain        # Should show a dashboard (not "command not found")
 ```
 
-> Name collision: `rtk gain` failing means you have `reachingforthejack/rtk` (Rust Type Kit) installed instead. Run `which rtk` to check.
 
 ## Build, Test & Lint
 
