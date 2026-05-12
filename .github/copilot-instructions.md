@@ -41,7 +41,7 @@ cargo fmt --all --check && cargo clippy --all-targets && cargo test
 bash scripts/test-all.sh       # Smoke tests (requires installed binary)
 ```
 
-PRs target the **`develop`** branch, not `main`. All commits require a DCO sign-off (`git commit -s`).
+Create focused Git branches with conventional names and descriptions, and open PRs against this fork's mainline branch.
 
 ## Architecture
 

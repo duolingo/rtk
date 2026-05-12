@@ -18,12 +18,6 @@ This fork keeps output filtering and hook integrations, and removes:
 cargo install --git https://github.com/duolingo/rtk
 ```
 
-### Homebrew
-
-```bash
-brew install rtk
-```
-
 ## Quick start
 
 ```bash

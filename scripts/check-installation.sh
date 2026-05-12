@@ -24,7 +24,7 @@ else
     echo -e "   ${RED}❌ RTK is NOT installed${NC}"
     echo ""
     echo "   Install with:"
-    echo "   curl -fsSL https://github.com/rtk-ai/rtk/blob/master/install.sh| sh"
+    echo "   cargo install --git https://github.com/duolingo/rtk"
     exit 1
 fi
 echo ""
@@ -45,7 +45,7 @@ else
     echo ""
     echo "   You installed the wrong package. Fix it with:"
     echo "   cargo uninstall rtk"
-    echo "   curl -fsSL https://github.com/rtk-ai/rtk/blob/master/install.sh | sh"
+    echo "   cargo install --git https://github.com/duolingo/rtk"
     CORRECT_RTK=false
 fi
 echo ""
@@ -141,9 +141,8 @@ if [ ${#MISSING_FEATURES[@]} -gt 0 ]; then
     echo ""
     echo "To get all features, install the fork:"
     echo "  cargo uninstall rtk"
-    echo "  curl -fsSL https://github.com/rtk-ai/rtk/blob/master/install.sh | sh"
-    echo "  cd rtk && git checkout feat/all-features"
-    echo "  cargo install --path . --force"
+    echo "  cargo install --git https://github.com/duolingo/rtk --force"
+    echo "  # or, from a local checkout: cargo install --path . --force"
 else
     echo -e "${GREEN}✅ Full-featured RTK installation detected${NC}"
 fi

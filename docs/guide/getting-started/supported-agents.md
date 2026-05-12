@@ -7,7 +7,7 @@ sidebar:
 
 # Supported Agents
 
-RTK supports all major AI coding agents across 3 integration tiers. Mistral Vibe support is planned.
+RTK supports the AI coding agents listed below across 3 integration tiers.
 
 ## How it works
 
@@ -34,13 +34,11 @@ Agent runs "cargo test"
 | Cursor | Shell hook (`preToolUse`) | Yes |
 | Gemini CLI | Rust binary (`BeforeTool`) | Yes |
 | OpenCode | TypeScript plugin (`tool.execute.before`) | Yes |
-| OpenClaw | TypeScript plugin (`before_tool_call`) | Yes |
 | Cline / Roo Code | Rules file (prompt-level) | N/A |
 | Windsurf | Rules file (prompt-level) | N/A |
 | Codex CLI | AGENTS.md instructions | N/A |
 | Kilo Code | Rules file (prompt-level) | N/A |
 | Google Antigravity | Rules file (prompt-level) | N/A |
-| Mistral Vibe | Planned ([#800](https://github.com/rtk-ai/rtk/issues/800)) | Pending upstream |
 
 ## Installation by agent
 
@@ -84,14 +82,6 @@ rtk init --global --opencode
 
 Creates `~/.config/opencode/plugins/rtk.ts`. Uses the `tool.execute.before` hook.
 
-### OpenClaw
-
-```bash
-openclaw plugins install ./openclaw
-```
-
-Plugin in the `openclaw/` directory. Uses the `before_tool_call` hook, delegates to `rtk rewrite`.
-
 ### Cline / Roo Code
 
 ```bash
@@ -127,10 +117,6 @@ rtk init --agent antigravity    # creates .agents/rules/antigravity-rtk-rules.md
 ```
 
 Antigravity reads `.agents/rules/` as custom instructions. RTK adds guidance telling Antigravity to prefer `rtk <cmd>` over raw commands.
-
-### Mistral Vibe (planned)
-
-Support is blocked on upstream `BeforeToolCallback` ([mistral-vibe#531](https://github.com/mistralai/mistral-vibe/issues/531)). Tracked in [#800](https://github.com/rtk-ai/rtk/issues/800).
 
 ## Integration tiers explained
 

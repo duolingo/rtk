@@ -1,10 +1,10 @@
 #!/usr/bin/env sh
-# rtk installer - https://github.com/rtk-ai/rtk
-# Usage: curl -fsSL https://raw.githubusercontent.com/rtk-ai/rtk/refs/heads/master/install.sh | sh
+# rtk installer - https://github.com/duolingo/rtk
+# Usage: curl -fsSL https://raw.githubusercontent.com/duolingo/rtk/refs/heads/master/install.sh | sh
 
 set -e
 
-REPO="rtk-ai/rtk"
+REPO="duolingo/rtk"
 BINARY_NAME="rtk"
 INSTALL_DIR="${RTK_INSTALL_DIR:-$HOME/.local/bin}"
 
@@ -83,6 +83,15 @@ get_target() {
     esac
 }
 
+install_from_cargo() {
+    if ! command -v cargo >/dev/null 2>&1; then
+        error "No release binary found and cargo is not installed. Install Rust from https://rustup.rs or set RTK_VERSION to a published release tag."
+    fi
+
+    info "Falling back to cargo install from https://github.com/${REPO}"
+    cargo install --git "https://github.com/${REPO}" --force
+}
+
 # Download and install
 install() {
     info "Detected: $OS $ARCH"
@@ -95,7 +104,10 @@ install() {
 
     info "Downloading from: $DOWNLOAD_URL"
     if ! curl -fsSL "$DOWNLOAD_URL" -o "$ARCHIVE"; then
-        error "Failed to download binary"
+        warn "Failed to download binary release asset"
+        rm -rf "$TEMP_DIR"
+        install_from_cargo
+        return
     fi
 
     info "Extracting..."
