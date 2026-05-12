@@ -11,19 +11,19 @@ check_added_lines() {
   [ -z "$added" ] && return 0
 
   # Security-sensitive shell spawning patterns.
-  if echo "$added" | rg -n 'Command::new\("(sh|bash)"\)' >/dev/null; then
+  if echo "$added" | grep -nE 'Command::new\("(sh|bash)"\)' >/dev/null; then
     echo "FAIL [$file] direct shell spawn detected (Command::new(\"sh\"|\"bash\"))."
     fail=1
   fi
 
   # Panic/debug markers in production code.
-  if echo "$added" | rg -n '(^|[^[:alnum:]_])(todo!|unimplemented!|dbg!)\s*\(' >/dev/null; then
+  if echo "$added" | grep -nE '(^|[^[:alnum:]_])(todo!|unimplemented!|dbg!)[[:space:]]*\(' >/dev/null; then
     echo "FAIL [$file] todo!/unimplemented!/dbg! added."
     fail=1
   fi
 
   # Suspicious env mutation patterns.
-  if echo "$added" | rg -n '\.env\("(LD_PRELOAD|PATH)"' >/dev/null; then
+  if echo "$added" | grep -nE '\.env\("(LD_PRELOAD|PATH)"' >/dev/null; then
     echo "FAIL [$file] .env(\"LD_PRELOAD\"|\"PATH\") added."
     fail=1
   fi

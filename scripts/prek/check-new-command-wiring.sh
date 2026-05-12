@@ -18,11 +18,11 @@ fi
 changed_files=$(echo "$status_lines" | awk '{print $2}')
 
 missing=0
-if ! echo "$changed_files" | rg -n '^src/main\.rs$' >/dev/null; then
+if ! echo "$changed_files" | grep -nE '^src/main\.rs$' >/dev/null; then
   echo "FAIL new command module added, but src/main.rs was not updated"
   missing=1
 fi
-if ! echo "$changed_files" | rg -n '^src/discover/rules\.rs$' >/dev/null; then
+if ! echo "$changed_files" | grep -nE '^src/discover/rules\.rs$' >/dev/null; then
   echo "FAIL new command module added, but src/discover/rules.rs was not updated"
   missing=1
 fi

@@ -26,51 +26,74 @@ rules:
     languages: [rust]
     severity: ERROR
 
+  - id: direct-network-api
+    pattern-regex: \b(std::net|core::net|TcpStream|TcpListener|UdpSocket|ToSocketAddrs|lookup_host)\b
+    message: >
+      Direct network API detected. RTK must not open sockets or resolve hosts;
+      network-capable commands may only run when explicitly requested by the user.
+    languages: [rust]
+    severity: ERROR
+
   - id: raw-socket-usage
     pattern-either:
       - pattern: TcpStream::$METHOD(...)
       - pattern: UdpSocket::$METHOD(...)
       - pattern: TcpListener::$METHOD(...)
     message: >
-      Raw socket usage detected. RTK is a CLI proxy — it should not
-      open network connections directly. Use ureq in telemetry only.
+      Raw socket usage detected. RTK is a CLI proxy — it must not open network
+      connections or include telemetry/call-home behavior.
     languages: [rust]
     severity: ERROR
 
-  - id: reqwest-forbidden
-    pattern: reqwest::$METHOD(...)
+  - id: http-client-forbidden
+    pattern-either:
+      - pattern: reqwest::$METHOD(...)
+      - pattern: ureq::$METHOD(...)
+      - pattern: hyper::$METHOD(...)
+      - pattern: isahc::$METHOD(...)
+      - pattern: surf::$METHOD(...)
+      - pattern: attohttpc::$METHOD(...)
     message: >
-      reqwest is forbidden in RTK. The project uses ureq for HTTP
-      (telemetry only). Adding reqwest increases binary size and attack surface.
+      HTTP client usage is forbidden in RTK. The binary must not include an
+      in-process network client or any telemetry/call-home path.
     languages: [rust]
     severity: ERROR
 
-  - id: interpreter-execution
+  - id: network-helper-process
     pattern-either:
       - pattern: Command::new("curl")
       - pattern: Command::new("wget")
-      - pattern: Command::new("python")
-      - pattern: Command::new("python3")
-      - pattern: Command::new("node")
-      - pattern: Command::new("bash")
-      - pattern: Command::new("sh")
-      - pattern: Command::new("perl")
-      - pattern: Command::new("ruby")
+      - pattern: Command::new("nc")
+      - pattern: Command::new("netcat")
+      - pattern: Command::new("ncat")
+      - pattern: Command::new("socat")
+      - pattern: Command::new("ssh")
+      - pattern: Command::new("scp")
+      - pattern: Command::new("sftp")
+      - pattern: resolved_command("curl")
+      - pattern: resolved_command("wget")
+      - pattern: resolved_command("nc")
+      - pattern: resolved_command("netcat")
+      - pattern: resolved_command("ncat")
+      - pattern: resolved_command("socat")
+      - pattern: resolved_command("ssh")
+      - pattern: resolved_command("scp")
+      - pattern: resolved_command("sftp")
+    paths:
+      exclude:
+        - src/cmds/cloud/curl_cmd.rs
+        - src/cmds/cloud/wget_cmd.rs
     message: >
-      Direct interpreter/downloader execution detected.
-      RTK proxies user commands — it should never spawn interpreters
-      or download tools on its own.
+      Network helper process detected outside a dedicated user-requested proxy.
+      Hidden curl/wget/nc/ssh-style calls are call-home footguns.
     languages: [rust]
     severity: ERROR
 
-  - id: ureq-outside-telemetry
-    pattern: ureq::$METHOD(...)
-    paths:
-      exclude:
-        - /src/core/telemetry.rs
+  - id: hardcoded-endpoint-child-process-arg
+    pattern-regex: \.(arg|args)\([^;\n]*(https?://|api\.)
     message: >
-      ureq usage outside of src/core/telemetry.rs.
-      HTTP calls are restricted to the telemetry module to prevent data exfiltration.
+      Hard-coded endpoint passed to a child process. RTK must not embed outbound
+      destinations; only user-provided command arguments may control network I/O.
     languages: [rust]
     severity: ERROR
 

@@ -7,7 +7,7 @@ for file in "$@"; do
   [[ "$file" =~ ^src/cmds/.+_cmd\.rs$ ]] || continue
   [ -f "$file" ] || continue
 
-  if ! rg -n '^\s*#\[cfg\(test\)\]' "$file" >/dev/null; then
+  if ! grep -nE '^[[:space:]]*#\[cfg\(test\)\]' "$file" >/dev/null; then
     echo "FAIL [$file] missing #[cfg(test)] module"
     fail=1
   fi

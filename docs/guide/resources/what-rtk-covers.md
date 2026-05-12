@@ -153,5 +153,3 @@ If a command isn't in the list above, RTK runs it through passthrough — the ou
 ```bash
 rtk proxy make install    # runs make install, tracks usage, no filtering
 ```
-
-

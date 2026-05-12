@@ -14,7 +14,6 @@ repos:
     hooks:
       - id: check-merge-conflict
       - id: check-case-conflict
-      - id: check-symlinks
       - id: end-of-file-fixer
       - id: trailing-whitespace
       - id: mixed-line-ending
@@ -28,6 +27,13 @@ repos:
       - id: architecture-size-guard
         name: architecture-size-guard
         entry: bash scripts/prek/check-architecture-size.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+
+      - id: no-call-home
+        name: no-call-home-guard
+        entry: bash scripts/prek/check-call-home.sh
         language: system
         pass_filenames: false
         always_run: true

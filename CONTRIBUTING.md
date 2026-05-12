@@ -56,7 +56,9 @@ Every filter needs a fallback path. Every hook must handle malformed input grace
 
 <10ms startup. No async runtime. No config file I/O on the critical path. If developers perceive any delay, they'll disable RTK. Speed is the difference between adoption and abandonment.
 
-`lazy_static!` for all regex. No network calls. No disk reads in the hot path. Benchmark before/after with `hyperfine`.
+`lazy_static!` for all regex. No project-owned network calls or telemetry. No disk reads in the hot path. Benchmark before/after with `hyperfine`.
+
+The `no-call-home` pre-commit/CI guard enforces this by blocking in-process network crates/APIs, telemetry-looking modules, hidden curl/wget/nc/ssh helpers, and workflow/hook API egress. User-requested proxies such as `rtk curl URL` remain allowed because the destination comes from the user's command.
 
 ### Extensibility
 
@@ -302,7 +304,7 @@ Keep documentation concise and practical -- examples over explanations.
 - **Bug reports & features**: [Issues](../../issues)
 - **Discussions**: [GitHub Discussions](../../discussions)
 
-**For external contributors**: Your PR will undergo automated security review (see [SECURITY.md](SECURITY.md)). 
+**For external contributors**: Your PR will undergo automated security review (see [SECURITY.md](SECURITY.md)).
 This protects RTK's shell execution capabilities against injection attacks and supply chain vulnerabilities.
 
 ---
