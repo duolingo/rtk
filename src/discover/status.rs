@@ -7,6 +7,4 @@ pub enum RtkStatus {
     Existing,
     /// Works via passthrough, no filtering.
     Passthrough,
-    /// RTK does not handle this command.
-    NotSupported,
 }

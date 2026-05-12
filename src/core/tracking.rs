@@ -700,10 +700,6 @@ impl Tracker {
     /// }
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    pub fn get_all_days(&self) -> Result<Vec<DayStats>> {
-        self.get_all_days_filtered(None) // delegate to filtered variant
-    }
-
     /// Get daily statistics filtered by project path. // added
     pub fn get_all_days_filtered(&self, project_path: Option<&str>) -> Result<Vec<DayStats>> {
         let (project_exact, project_glob) = project_filter_params(project_path); // added
@@ -773,6 +769,7 @@ impl Tracker {
     /// }
     /// # Ok::<(), anyhow::Error>(())
     /// ```
+    #[allow(dead_code)]
     pub fn get_by_week(&self) -> Result<Vec<WeekStats>> {
         self.get_by_week_filtered(None) // delegate to filtered variant
     }
@@ -848,6 +845,7 @@ impl Tracker {
     /// }
     /// # Ok::<(), anyhow::Error>(())
     /// ```
+    #[allow(dead_code)]
     pub fn get_by_month(&self) -> Result<Vec<MonthStats>> {
         self.get_by_month_filtered(None) // delegate to filtered variant
     }

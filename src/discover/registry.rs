@@ -3,7 +3,7 @@
 use lazy_static::lazy_static;
 use regex::{Regex, RegexSet};
 
-use super::lexer::{split_on_operators, tokenize, TokenKind};
+use super::lexer::{tokenize, TokenKind};
 use super::rules::{IGNORED_EXACT, IGNORED_PREFIXES, RULES};
 
 /// Result of classifying a command.
@@ -19,29 +19,6 @@ pub enum Classification {
         base_command: String,
     },
     Ignored,
-}
-
-/// Average token counts per category for estimation when no output_len available.
-pub fn category_avg_tokens(category: &str, subcmd: &str) -> usize {
-    match category {
-        "Git" => match subcmd {
-            "log" | "diff" | "show" => 200,
-            _ => 40,
-        },
-        "Cargo" => match subcmd {
-            "test" => 500,
-            _ => 150,
-        },
-        "Tests" => 800,
-        "Files" => 100,
-        "Build" => 300,
-        "Infra" => 120,
-        "Network" => 150,
-        "GitHub" => 200,
-        "GitLab" => 200,
-        "PackageManager" => 150,
-        _ => 150,
-    }
 }
 
 lazy_static! {
@@ -233,20 +210,6 @@ pub fn has_heredoc(cmd: &str) -> bool {
         .any(|t| t.kind == TokenKind::Redirect && t.value.starts_with("<<"))
 }
 
-pub fn split_command_chain(cmd: &str) -> Vec<&str> {
-    let trimmed = cmd.trim();
-    if trimmed.is_empty() {
-        return vec![];
-    }
-
-    // Lexer-based for `<<`; string-based for `$((` (lexer splits it across tokens).
-    if has_heredoc(trimmed) || trimmed.contains("$((") {
-        return vec![trimmed];
-    }
-
-    split_on_operators(trimmed, true)
-}
-
 /// Strip git global options before the subcommand (#163).
 /// `git -C /tmp status` → `git status`, preserving the rest.
 /// Returns the original string unchanged if not a git command.
@@ -392,15 +355,6 @@ pub fn has_rtk_disabled_prefix(cmd: &str) -> bool {
 }
 
 /// Strip RTK_DISABLED=X and other env prefixes, return the actual command.
-pub fn strip_disabled_prefix(cmd: &str) -> &str {
-    let trimmed = cmd.trim();
-    let stripped = ENV_PREFIX.replace(trimmed, "");
-    // stripped is a Cow<str> that borrows from trimmed when no replacement happens.
-    // We need to return a &str into the original, so compute the offset.
-    let prefix_len = trimmed.len() - stripped.len();
-    trimmed[prefix_len..].trim_start()
-}
-
 fn strip_trailing_redirects(cmd: &str) -> (&str, &str) {
     let tokens = tokenize(cmd);
     if tokens.is_empty() {
@@ -782,6 +736,30 @@ fn strip_word_prefix<'a>(cmd: &'a str, prefix: &str) -> Option<&'a str> {
 mod tests {
     use super::super::status::RtkStatus;
     use super::*;
+    use crate::discover::lexer::split_on_operators;
+
+    fn split_command_chain(cmd: &str) -> Vec<&str> {
+        let trimmed = cmd.trim();
+        if trimmed.is_empty() {
+            return vec![];
+        }
+
+        // Lexer-based for `<<`; string-based for `$((` (lexer splits it across tokens).
+        if has_heredoc(trimmed) || trimmed.contains("$((") {
+            return vec![trimmed];
+        }
+
+        split_on_operators(trimmed, true)
+    }
+
+    fn strip_disabled_prefix(cmd: &str) -> &str {
+        let trimmed = cmd.trim();
+        let stripped = ENV_PREFIX.replace(trimmed, "");
+        // stripped is a Cow<str> that borrows from trimmed when no replacement happens.
+        // We need to return a &str into the original, so compute the offset.
+        let prefix_len = trimmed.len() - stripped.len();
+        trimmed[prefix_len..].trim_start()
+    }
 
     #[test]
     fn test_classify_git_status() {

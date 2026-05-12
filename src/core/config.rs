@@ -206,6 +206,6 @@ history_days = 90
     #[test]
     fn test_old_toml_without_consent_fields() {
         let toml = r#""#;
-        let config: Config = toml::from_str(toml).expect("valid toml");
+        let _config: Config = toml::from_str(toml).expect("valid toml");
     }
 }

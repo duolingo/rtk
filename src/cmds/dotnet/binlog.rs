@@ -683,6 +683,7 @@ pub fn parse_build_from_text(text: &str) -> BuildSummary {
             issue.message.clone(),
         );
 
+        #[allow(clippy::collapsible_match)]
         match captures.name("kind").map(|m| m.as_str()) {
             Some("error") => {
                 if seen_errors.insert(key) {
@@ -1008,6 +1009,7 @@ pub fn parse_restore_issues_from_text(text: &str) -> (Vec<BinlogIssue>, Vec<Binl
             issue.message.clone(),
         );
 
+        #[allow(clippy::collapsible_match)]
         match captures
             .name("kind")
             .map(|m| m.as_str().to_ascii_lowercase())

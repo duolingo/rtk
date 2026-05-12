@@ -95,46 +95,6 @@ pub fn format_tokens(n: usize) -> String {
 ///
 /// # Examples
 /// ```
-/// use rtk::utils::format_usd;
-/// assert_eq!(format_usd(1234.567), "$1234.57");
-/// assert_eq!(format_usd(12.345), "$12.35");
-/// assert_eq!(format_usd(0.123), "$0.12");
-/// assert_eq!(format_usd(0.0096), "$0.0096");
-/// ```
-pub fn format_usd(amount: f64) -> String {
-    if !amount.is_finite() {
-        return "$0.00".to_string();
-    }
-    if amount >= 0.01 {
-        format!("${:.2}", amount)
-    } else {
-        format!("${:.4}", amount)
-    }
-}
-
-/// Format cost-per-token as $/MTok (e.g., "$3.86/MTok")
-///
-/// # Arguments
-/// * `cpt` - Cost per token (not per million tokens)
-///
-/// # Returns
-/// Formatted string like "$3.86/MTok"
-///
-/// # Examples
-/// ```
-/// use rtk::utils::format_cpt;
-/// assert_eq!(format_cpt(0.000003), "$3.00/MTok");
-/// assert_eq!(format_cpt(0.0000038), "$3.80/MTok");
-/// assert_eq!(format_cpt(0.00000386), "$3.86/MTok");
-/// ```
-pub fn format_cpt(cpt: f64) -> String {
-    if !cpt.is_finite() || cpt <= 0.0 {
-        return "$0.00/MTok".to_string();
-    }
-    let cpt_per_million = cpt * 1_000_000.0;
-    format!("${:.2}/MTok", cpt_per_million)
-}
-
 /// Join items into a newline-separated string, appending an overflow hint when total > max.
 ///
 /// # Examples
@@ -407,6 +367,27 @@ pub fn human_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Format a currency amount as USD (internal test function).
+    fn format_usd(amount: f64) -> String {
+        if !amount.is_finite() {
+            return "$0.00".to_string();
+        }
+        if amount >= 0.01 {
+            format!("${:.2}", amount)
+        } else {
+            format!("${:.4}", amount)
+        }
+    }
+
+    /// Format cost-per-token as $/MTok (internal test function).
+    fn format_cpt(cpt: f64) -> String {
+        if !cpt.is_finite() || cpt <= 0.0 {
+            return "$0.00/MTok".to_string();
+        }
+        let cpt_per_million = cpt * 1_000_000.0;
+        format!("${:.2}/MTok", cpt_per_million)
+    }
 
     #[test]
     fn test_truncate_short_string() {
